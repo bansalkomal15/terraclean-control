@@ -63,9 +63,10 @@ function setSessionCookie(res, token, days) {
     maxAge: days * 86400000, path: '/'
   });
 }
-/* administrators sign in with a one-time code to their mailbox and never keep
-   a password; everyone else sets their own password from an invite */
-const usesCode = person => !!person.admin;
+/* How someone signs in is set per person under Organisation, and is separate
+   from whether they are an administrator. A one-time code needs working email;
+   a password needs only an invite code, which can be passed on by hand. */
+const usesCode = person => (person.signin || (person.admin ? 'code' : 'password')) === 'code';
 
 /* ===========================================================================
    SIGNING IN
@@ -194,7 +195,7 @@ app.post('/api/org/invite', requireUser, requireAdmin, wrap(async (req, res) => 
   const target = S.personById(state, String(req.body.personId || ''));
   if (!target) return json(res, 404, { error: 'no such person' });
   if (!target.email) return json(res, 400, { error: 'Give them an email address first — that is their login.' });
-  if (target.admin) return json(res, 400, { error: 'Administrators sign in with a one-time code, so they do not need an invite.' });
+  if (usesCode(target)) return json(res, 400, { error: target.name + ' signs in with a one-time code. Switch them to Password under Organisation first if you want to issue an invite.' });
 
   const { code, days } = await auth.issueInvite(target.email);
   await auth.clearCredential(target.email);      /* also serves as a password reset */
@@ -278,8 +279,26 @@ app.post('/api/reset', requireUser, requireAdmin, wrap(async (req, res) => {
   json(res, 200, { rev, state: S.pruneForUser(fresh, req.user) });
 }));
 
+/* A quick look under the bonnet — useful when something looks empty and you
+   need to know whether the data is there at all. */
 app.get('/api/health', wrap(async (req, res) => {
-  json(res, 200, { ok: true, storage: store.driverKind(), mail: mailer.configured });
+  let projects = null, wbsPresent = null;
+  try {
+    const { state } = await store.readDoc();
+    projects = (state.projects || []).map(p => {
+      let items = 0;
+      S.walkAll(p, () => items++);
+      return { name: p.name, packages: (p.packages || []).length, items };
+    });
+    wbsPresent = (state.standardTemplate || []).length;
+  } catch (e) { projects = 'error: ' + e.message; }
+  json(res, 200, {
+    ok: true,
+    storage: store.driverKind(),
+    mail: mailer.configured,
+    standardTemplatePackages: wbsPresent,
+    projects
+  });
 }));
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));

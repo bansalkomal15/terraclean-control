@@ -50,20 +50,24 @@ function newProject(o) {
 
 module.exports = function seed() {
   const adminEmail = (process.env.ADMIN_EMAIL || 'bansalkomal15@gmail.com').toLowerCase();
-  const adminName = process.env.ADMIN_NAME || 'CEO';
+  const adminName = process.env.ADMIN_NAME || 'Administrator';
 
+  /* signin: 'code'     — a one-time code by email, no password
+     signin: 'password' — an invite code once, then their own password
+     Both can hold admin rights; the two are independent. */
   const org = [
-    { id: 'ceo', name: adminName, designation: 'Chief Executive Officer', dept: 'Executive', email: adminEmail, admin: true },
-    { id: 'p1', name: 'A. Sharma', designation: '', dept: 'Land & revenue', email: '' },
-    { id: 'p2', name: 'B. Nair', designation: '', dept: 'Regulatory & connectivity', email: '' },
-    { id: 'p3', name: 'C. Patel', designation: '', dept: 'Procurement', email: '' },
-    { id: 'p4', name: 'D. Rao', designation: '', dept: 'Electrical & EHV', email: '' },
-    { id: 'p5', name: 'E. Verma', designation: '', dept: 'Civil & BoS', email: '' },
-    { id: 'p6', name: 'F. Khan', designation: '', dept: 'Legal', email: '' },
-    { id: 'p7', name: 'G. Iyer', designation: '', dept: 'Finance, PPA & offtake', email: '' },
-    { id: 'p8', name: 'H. Singh', designation: '', dept: 'Project management — Morena', email: '' },
-    { id: 'p9', name: 'J. Desai', designation: '', dept: 'Project management — Gujarat', email: '' },
-    { id: 'p10', name: 'K. Menon', designation: '', dept: 'Quality & commissioning', email: '' }
+    { id: 'admin', name: adminName, designation: 'Administrator', dept: 'Executive', email: adminEmail, admin: true, signin: 'code' },
+    { id: 'ceo', name: 'CEO', designation: 'Chief Executive Officer', dept: 'Executive', email: '', admin: true, signin: 'password' },
+    { id: 'p1', name: 'A. Sharma', designation: '', dept: 'Land & revenue', email: '', signin: 'password' },
+    { id: 'p2', name: 'B. Nair', designation: '', dept: 'Regulatory & connectivity', email: '', signin: 'password' },
+    { id: 'p3', name: 'C. Patel', designation: '', dept: 'Procurement', email: '', signin: 'password' },
+    { id: 'p4', name: 'D. Rao', designation: '', dept: 'Electrical & EHV', email: '', signin: 'password' },
+    { id: 'p5', name: 'E. Verma', designation: '', dept: 'Civil & BoS', email: '', signin: 'password' },
+    { id: 'p6', name: 'F. Khan', designation: '', dept: 'Legal', email: '', signin: 'password' },
+    { id: 'p7', name: 'G. Iyer', designation: '', dept: 'Finance, PPA & offtake', email: '', signin: 'password' },
+    { id: 'p8', name: 'H. Singh', designation: '', dept: 'Project management — Morena', email: '', signin: 'password' },
+    { id: 'p9', name: 'J. Desai', designation: '', dept: 'Project management — Gujarat', email: '', signin: 'password' },
+    { id: 'p10', name: 'K. Menon', designation: '', dept: 'Quality & commissioning', email: '', signin: 'password' }
   ];
 
   const morena = newProject({

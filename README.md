@@ -4,15 +4,23 @@ Projects and their work breakdown, offtake and PPA pipeline, enablers, a CEO
 decision queue, and daily and weekly trackers. The CEO sees everything; everyone
 else sees only what carries their name.
 
-**Two sign-in doors, as asked:**
+**Sign-in is set per person, under Organisation.** Two things are chosen
+separately: whether someone has **full access** (sees the whole portfolio), and
+**how they sign in**.
 
-| | How they get in |
+| How they sign in | What happens |
 | --- | --- |
-| **CEO** — `bansalkomal15@gmail.com` | Types the email, receives a six-digit code by email, enters it. No password, ever. |
-| **Everyone else** | The CEO issues them an invite code. They enter it once and **choose their own password**. From then on it is email + password. |
+| **One-time code** | A six-digit code is emailed each time. No password ever. Needs email that actually reaches them. |
+| **Password** | You issue an invite code once; they enter it and choose their own password. Nothing to email — pass the code on however you like. |
 
-Forgotten a password? The CEO issues a new invite code — that resets it. No
-password reset emails to configure.
+Seeded to start with:
+
+- `bansalkomal15@gmail.com` — **Administrator**, full access, one-time code
+- **CEO** — full access, password. Put their real email in under Organisation,
+  click **Invite**, and send them the code.
+
+Both see exactly the same dashboard. Forgotten a password? Click **Invite**
+again — that resets it.
 
 ---
 

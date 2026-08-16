@@ -382,7 +382,8 @@ function taskTable(items, opts) {
   items.forEach(i => {
     const tr = el('tr');
     if (i.kind === 'task') {
-      const can = isCEO() || i.t.owner === S.viewer || i.t.by === pname(S.viewer);
+      const can = isCEO() || i.t.owner === S.viewer || i.t.by === pname(S.viewer) ||
+        (i.t.projectId && (proj(i.t.projectId) || {}).head === S.viewer);
       if (i.done) tr.className = 'done';
       const cb = el('input'); cb.type = 'checkbox'; cb.disabled = !can; cb.checked = !!i.done;
       cb.title = i.done ? 'Reopen' : 'Mark done';
@@ -429,9 +430,21 @@ function taskTable(items, opts) {
       };
       tr.appendChild(el('td')).appendChild(cb);
       const tc = el('td');
-      const lk = el('button', 'linkish', esc(trim(i.n.name, 54)));
-      lk.onclick = () => { PID = i.p.id; VIEW = 'project'; render(); openTask(i.p, i.n); };
-      tc.append(lk, el('div', 'sub', 'Project activity · ' + esc(statusOf(i.n)) + ' · ' + pct0(progOf(i.n))));
+      if (can) {
+        /* rename the activity straight from the tracker */
+        const ti = el('input'); ti.type = 'text'; ti.className = 'inline title'; ti.value = i.n.name;
+        ti.onchange = () => { i.n.name = ti.value.trim() || i.n.name; save(); };
+        tc.appendChild(ti);
+      } else {
+        tc.appendChild(el('div', 'inline title', esc(trim(i.n.name, 54))));
+      }
+      const open = el('button', 'linkish sub', 'Open in ' + esc(i.p.name));
+      open.style.fontSize = '11.5px';
+      open.onclick = () => { PID = i.p.id; VIEW = 'project'; render(); openTask(i.p, i.n); };
+      const meta = el('div', 'sub');
+      meta.textContent = 'Project activity · ' + statusOf(i.n) + ' · ' + pct0(progOf(i.n)) + ' · ';
+      meta.appendChild(open);
+      tc.appendChild(meta);
       tr.appendChild(tc);
       tr.appendChild(el('td')).appendChild(selOwner(i.n.owner, v => {
         i.n.owner = v || undefined; save();
@@ -445,6 +458,16 @@ function taskTable(items, opts) {
       tr.appendChild(el('td')).appendChild(selUrg(i.n.urg || 'Medium', v => { i.n.urg = v; save(); render(); }, !can));
       const ac = el('td', 'r');
       if (i.n.owner) ac.appendChild(mailBtn(i.n.owner, ...(() => { const m = assignedMail(i.n.owner, i.n.name, due(i.n), i.p.name); return [m.s, m.b]; })()));
+      if (can) {
+        const clear = el('button', 'btn ghost sm', '⌫');
+        clear.title = 'Take it off the tracker by clearing its target date. The activity stays in the project.';
+        clear.onclick = () => { i.n.due = ''; delete i.n.f; save(); render(); toast('Taken off the tracker'); };
+        ac.appendChild(clear);
+        const x = el('button', 'btn ghost sm', '×');
+        x.title = 'Delete this activity from the project altogether';
+        x.onclick = () => { deleteNode(i.p, i.n); };
+        ac.appendChild(x);
+      }
       tr.appendChild(ac);
     }
     tb.appendChild(tr);
@@ -1871,7 +1894,7 @@ function viewOrg() {
   const v = $('#view'); v.innerHTML = '';
 
   const t = el('table', 'tbl orgtbl');
-  t.innerHTML = '<thead><tr><th>Name</th><th>Designation</th><th>Department / function</th><th>Email — this is their login</th><th class="c">CEO access</th><th class="r">Assigned</th><th></th></tr></thead>';
+  t.innerHTML = '<thead><tr><th>Name</th><th>Designation</th><th>Department / function</th><th>Email — this is their login</th><th>How they sign in</th><th class="c">Full access</th><th class="r">Assigned</th><th></th></tr></thead>';
   const tb = el('tbody');
   S.org.forEach(o => {
     const tr = el('tr');
@@ -1884,6 +1907,17 @@ function viewOrg() {
     tr.appendChild(mk(o.designation, 'e.g. Vice President', 'designation'));
     tr.appendChild(mk(o.dept, 'e.g. Land & revenue', 'dept'));
     tr.appendChild(mk(o.email, 'name@terraclean.in', 'email'));
+
+    const sc = el('td');
+    const sel = el('select'); sel.className = 'inline';
+    const cur = o.signin || (o.admin ? 'code' : 'password');
+    sel.innerHTML = `<option value="password" ${cur === 'password' ? 'selected' : ''}>Password</option>
+                     <option value="code" ${cur === 'code' ? 'selected' : ''}>One-time code</option>`;
+    sel.title = 'Password: you give them an invite code once, they choose their own. One-time code: a code is emailed every time they sign in — only works if email reaches them.';
+    sel.onchange = () => { o.signin = sel.value; save(); render(); };
+    sc.appendChild(sel);
+    tr.appendChild(sc);
+
     const ac = el('td', 'c');
     const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!o.admin; cb.style.width = 'auto';
     const lastAdmin = o.admin && S.org.filter(q => q.admin).length === 1;
@@ -1898,7 +1932,7 @@ function viewOrg() {
     const n = countAssigned(o.id);
     tr.appendChild(el('td', 'r num' + (n ? '' : ' sub'), String(n)));
     const rm = el('td', 'r');
-    if (!o.admin && o.email) {
+    if ((o.signin || (o.admin ? 'code' : 'password')) === 'password' && o.email) {
       const inv = el('button', 'btn ghost sm', 'Invite');
       inv.title = 'Issue a code so they can set their own password. Also resets a forgotten one.';
       inv.onclick = async () => {
