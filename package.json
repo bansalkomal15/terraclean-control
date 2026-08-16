@@ -1,0 +1,25 @@
+{
+  "name": "terraclean-control-tower",
+  "version": "1.0.0",
+  "description": "Portfolio control tower for Terra Clean — projects, offtake, enablers and a CEO dashboard.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test/permissions.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "optionalDependencies": {
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "nodemailer": "^6.9.14"
+  }
+}
