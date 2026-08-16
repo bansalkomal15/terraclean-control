@@ -337,6 +337,22 @@ body.locked .app{display:none}
 .tasktbl td.r .btn{margin-left:2px}
 .tasktbl td .sub{margin-top:2px}
 
+
+/* project owner strip */
+.ownerstrip{display:flex;gap:22px;align-items:center;flex-wrap:wrap;background:var(--neutral);
+  border-left:4px solid var(--pulse);border-radius:3px;padding:14px 18px;margin-bottom:22px}
+.os-left{min-width:230px;flex:1}
+.os-select{width:100%;max-width:330px;border:1px solid var(--line);background:#fff;border-radius:3px;
+  padding:7px 9px;font-family:var(--serif);font-size:19px;letter-spacing:-.01em;margin:3px 0 3px}
+.os-name{font-family:var(--serif);font-size:22px;letter-spacing:-.01em;margin:4px 0 2px}
+.os-mid{display:flex;gap:20px}
+.os-mid b{display:block;font-size:19px;font-weight:700}
+.os-mid span{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.os-right{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.ptbl select.inline{border:1px solid transparent;background:transparent;border-radius:2px;padding:4px 6px;font-size:12.5px;max-width:150px}
+.ptbl select.inline:hover{border-color:var(--line);background:#fff}
+@media (max-width:760px){.ownerstrip{gap:12px}.os-right{margin-left:0;width:100%}}
+
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>

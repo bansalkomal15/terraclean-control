@@ -3,26 +3,11 @@
    Everything here is editable in the app afterwards — this is a starting point,
    not a fixture. */
 const WBS = require('./wbs.json');
+const { applyCodes } = require('../lib/renumber');
 
 const uid = () => 'x' + Math.random().toString(36).slice(2, 9);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
-function letterCode(i) {
-  let s = ''; i = i + 1;
-  while (i > 0) { const r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); }
-  return s;
-}
-function applyCodes(project) {
-  project.packages.forEach((pk, i) => {
-    pk.code = letterCode(i);
-    (function rec(list, prefix) {
-      (list || []).forEach((n, j) => {
-        n.code = prefix ? prefix + '.' + (j + 1) : String(j + 1);
-        rec(n.children, n.code);
-      });
-    })(pk.children, '');
-  });
-}
 function clonePackages(list, keepData) {
   return list.map(function cp(n) {
     const o = { id: uid(), code: n.code, name: n.name, w: n.w, prog: keepData ? (n.prog || 0) : 0, log: [], children: (n.children || []).map(cp) };
@@ -81,7 +66,7 @@ module.exports = function seed() {
   });
   const rest = [3, 4, 5, 6, 7, 8].map(i => newProject({ name: 'Project ' + i }));
   const projects = [morena, gujarat].concat(rest);
-  projects.forEach(applyCodes);
+  projects.forEach(p => applyCodes(p.packages));
 
   return {
     v: 5,
@@ -89,7 +74,7 @@ module.exports = function seed() {
     notifyOnAssign: true,
     watch: ['A', 'B'],
     statuses: ['Not started', 'In progress', 'Applied', 'Submitted', 'Under review', 'Approved', 'Granted', 'Executed', 'On hold', 'Delayed'],
-    standardTemplate: templateFrom(clonePackages(WBS.packages, false)),
+    standardTemplate: templateFrom(applyCodes(clonePackages(WBS.packages, false))),
     org, projects,
     tasks: [], asks: [], templates: [],
     enablers: [

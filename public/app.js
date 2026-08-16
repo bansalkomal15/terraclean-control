@@ -361,10 +361,36 @@ function notify(ownerId, subject, body) {
   const p = person(ownerId);
   if (!p) { toast('Assign an owner first'); return; }
   api('POST', '/api/notify', { personId: ownerId, subject, body })
-    .then(r => toast(r.sent ? 'Emailed ' + p.name : (r.reason === 'no address on file'
-      ? 'No email address for ' + p.name + ' — add one under Organisation'
-      : 'Mail is not configured on the server — the message was logged instead')))
+    .then(r => {
+      if (r.sent) { toast('Emailed ' + p.name + (r.invite ? ' — with their sign-in code' : '')); return; }
+      if (r.reason === 'no address on file') { toast('No email address for ' + p.name + ' — add one under Organisation'); return; }
+      /* it did not go out: hand over whatever the person needs so nobody is stuck */
+      mailFailed(p, r);
+    })
     .catch(e => toast('Could not send: ' + e.message));
+}
+function mailFailed(p, r) {
+  const d = openDrawerEl(dHead('Email', 'Could not reach ' + p.name) + '<div class="dbody" id="db"></div>');
+  wireClose(d);
+  const b = document.getElementById('db');
+  b.innerHTML = `<p class="sub" style="margin-top:0">The message was written to the server log rather than sent.
+    ${r.hint ? '<br><br><b>' + esc(r.hint) + '</b>' : ''}</p>`;
+  if (r.invite) {
+    b.insertAdjacentHTML('beforeend',
+      `<div class="dsec"><h4>Their sign-in code — pass it on yourself</h4>
+       <div class="invitecode">${esc(r.invite)}</div>
+       <div class="sub">Login: <b>${esc(p.email)}</b>. They enter this once and choose their own password.</div></div>`);
+    const copy = el('button', 'btn pri', 'Copy a message to send');
+    copy.onclick = () => {
+      const t = 'Hello ' + p.name + ',\n\nYou have access to the Terra Clean control tower.\n\nLink: ' + location.origin +
+        '\nYour login: ' + p.email + '\nInvite code: ' + r.invite +
+        '\n\nOpen the link, type your email, then enter the code and choose your own password.';
+      navigator.clipboard.writeText(t).then(() => toast('Copied'), () => toast('Could not copy'));
+    };
+    b.appendChild(copy);
+  }
+  b.insertAdjacentHTML('beforeend',
+    '<div class="dsec"><h4>Fixing it</h4><div class="sub">Settings → Email has a test button and shows which service is in use.</div></div>');
 }
 
 function assignedMail(ownerId, what, whenBy, context) {
@@ -764,7 +790,15 @@ function viewProjects() {
     tr.appendChild(el('td', 'r num', p.cod ? mLabel(p.cod) : '—'));
     tr.appendChild(el('td', 'r num', String(countOpen(p))));
     tr.appendChild(el('td', 'r num' + (countLate(p) ? ' late' : ''), String(countLate(p))));
-    tr.appendChild(el('td', 'r sub', esc(pname(p.head))));
+    const ld = el('td', 'r');
+    if (isCEO()) {
+      const sel = el('select'); sel.className = 'inline';
+      sel.innerHTML = '<option value="">— nobody —</option>' +
+        S.org.map(o => `<option value="${o.id}" ${p.head === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+      sel.onchange = () => { p.head = sel.value; save(); render(); };
+      ld.appendChild(sel);
+    } else ld.textContent = pname(p.head);
+    tr.appendChild(ld);
     tb.appendChild(tr);
   });
   tbl.appendChild(tb);
@@ -889,6 +923,7 @@ function viewProject() {
   const chip = clipChip(); if (chip) ta.appendChild(chip);
   if (isCEO()) { const e = el('button', 'btn', 'Edit details'); e.onclick = () => editProject(p); ta.appendChild(e); }
   const v = $('#view'); v.innerHTML = '';
+  v.appendChild(ownerStrip(p, full));
   const pr = projProg(p), pl = plannedNow(p), h = health(p);
 
   if (!full) {
@@ -985,6 +1020,73 @@ function viewProject() {
   host.className = EDITING ? 'wb editing' : 'wb';
   wb.append(tb, host); renderTree(p, host);
   v.appendChild(wb);
+}
+
+/* One project, one person answerable for it. Kept at the very top so it is the
+   first thing read, and changeable in a single click by whoever may. */
+function ownerStrip(p, full) {
+  const box = el('div', 'ownerstrip');
+  const canSet = isCEO();
+  const lead = person(p.head);
+
+  const left = el('div', 'os-left');
+  left.innerHTML = '<div class="eyebrow">Project owner</div>';
+  if (canSet) {
+    const sel = el('select'); sel.className = 'os-select';
+    sel.innerHTML = '<option value="">— nobody yet —</option>' +
+      S.org.map(o => `<option value="${o.id}" ${p.head === o.id ? 'selected' : ''}>${esc(o.name)}${o.dept ? ' · ' + esc(o.dept) : ''}</option>`).join('');
+    sel.onchange = () => {
+      const prev = p.head;
+      p.head = sel.value; save();
+      if (p.head && p.head !== prev && S.notifyOnAssign) {
+        const who = person(p.head) || {};
+        notify(p.head,
+          'Terra Clean — you are now the owner of ' + p.name,
+          'Hello ' + (who.name || '') + ',\n\nYou have been made the owner of ' + p.name +
+          ((+p.solar || 0) + (+p.wind || 0) ? ' (' + ((+p.solar || 0) + (+p.wind || 0)) + ' MW' + (p.site ? ', ' + p.site : '') + ')' : '') +
+          '.\n\nThat means the whole project is yours to run: every package, the schedule, and anything logged against it.' +
+          (p.cod ? '\n\nTarget COD: ' + mLabel(p.cod) : ''));
+      }
+      render();
+    };
+    left.appendChild(sel);
+  } else {
+    left.appendChild(el('div', 'os-name', esc(lead ? lead.name : 'Nobody yet')));
+  }
+  if (lead) left.appendChild(el('div', 'sub', esc([lead.designation, lead.dept].filter(Boolean).join(' · ') || lead.email || '')));
+  else left.appendChild(el('div', 'sub', 'Every project should have one person answerable for it.'));
+  box.appendChild(left);
+
+  if (lead) {
+    let mine = 0, late = 0;
+    walkLeaves(p, n => { if (n.owner === lead.id) { mine++; if (isLate(n)) late++; } });
+    const mid = el('div', 'os-mid');
+    mid.innerHTML = `<div><b class="num">${countOpen(p)}</b><span>Open in project</span></div>
+      <div><b class="num ${countLate(p) ? 'late' : ''}">${countLate(p)}</b><span>Past due</span></div>
+      <div><b class="num">${mine}</b><span>Owned directly</span></div>`;
+    box.appendChild(mid);
+  }
+
+  const right = el('div', 'os-right');
+  if (lead && lead.email) {
+    const m = el('button', 'btn sm', '✉ Email them');
+    m.onclick = () => notify(lead.id, 'Terra Clean — ' + p.name,
+      'Hello ' + lead.name + ',\n\nA note about ' + p.name + '.\n\nProgress stands at ' + pct(projProg(p)) +
+      ' with ' + countLate(p) + ' activities past due.');
+    right.appendChild(m);
+  }
+  if (full) {
+    const b = el('button', 'btn sm', 'People on this project');
+    b.onclick = () => {
+      const map = {};
+      walkLeaves(p, n => { if (n.owner) map[n.owner] = (map[n.owner] || 0) + 1; });
+      const names = Object.keys(map).map(id => pname(id) + ' (' + map[id] + ')');
+      toast(names.length ? names.join(' · ') : 'Nobody owns an activity yet');
+    };
+    right.appendChild(b);
+  }
+  box.appendChild(right);
+  return box;
 }
 
 function sCurve(p) {
@@ -2255,6 +2357,37 @@ function viewSettings() {
     };
     pw.appendChild(b2);
     v.appendChild(pw);
+  }
+
+  if (adminBits) {
+    const em = el('section', 'sect');
+    em.innerHTML = `<header><h2>Email</h2><div class="sub">Used for sign-in codes, invite codes and assignment notices.</div></header>
+      <div id="mailStatus" class="sub">Checking…</div>`;
+    const row = el('div', 'row'); row.style.marginTop = '12px';
+    const to = el('input'); to.type = 'text'; to.placeholder = 'Send a test to…'; to.style.maxWidth = '280px';
+    to.value = (ME && ME.email) || '';
+    const go = el('button', 'btn pri', 'Send a test');
+    const out = el('div', 'sub'); out.style.marginTop = '10px';
+    go.onclick = async () => {
+      out.textContent = 'Sending…';
+      try {
+        const r = await api('POST', '/api/mail/test', { to: to.value.trim() });
+        out.innerHTML = r.sent
+          ? '<b>Sent.</b> Check ' + esc(r.to) + ' — it went via ' + esc(r.provider) + ', from ' + esc(r.from) + '.'
+          : '<b>Not sent.</b> ' + esc(r.hint || r.detail || r.reason || '') +
+            '<br>The message was written to the Vercel log instead.';
+      } catch (e) { out.textContent = e.message; }
+    };
+    row.append(to, go);
+    em.append(row, out);
+    v.appendChild(em);
+    api('GET', '/api/health').then(h => {
+      const n = document.getElementById('mailStatus');
+      if (!n) return;
+      n.innerHTML = h.mail
+        ? 'Sending through <b>' + esc(h.mailProvider) + '</b>, from <b>' + esc(h.mailFrom) + '</b>.'
+        : '<b>No mail service is set up.</b> Codes and invites are written to the Vercel log instead of being sent. Add BREVO_API_KEY in Vercel to turn it on.';
+    }).catch(() => { });
   }
 
   const note = el('section', 'sect');

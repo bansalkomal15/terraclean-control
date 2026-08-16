@@ -9,6 +9,7 @@ const store = require('../lib/store');
 const auth = require('../lib/auth');
 const mailer = require('../lib/mailer');
 const S = require('../lib/scope');
+const renumber = require('../lib/renumber');
 
 const PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const app = express();
@@ -212,7 +213,15 @@ app.post('/api/org/invite', requireUser, requireAdmin, wrap(async (req, res) => 
    STATE — reads are pruned, writes are merged. The browser never decides.
 =========================================================================== */
 app.get('/api/state', requireUser, wrap(async (req, res) => {
-  const { rev, state } = await store.readDoc();
+  let { rev, state } = await store.readDoc();
+  /* Older documents carry the spreadsheet's roman numerals and lowercase
+     letters. Put them right the first time an administrator opens the app —
+     logged changes and CEO items follow their activity to the new code. */
+  if (S.isAdmin(req.user) && renumber.needsRenumber(state)) {
+    renumber.renumberAll(state);
+    const newRev = await store.writeDoc(rev, state);
+    if (newRev !== null) { rev = newRev; console.log('[renumber] codes cleaned up'); }
+  }
   json(res, 200, { rev, state: S.pruneForUser(state, req.user) });
 }));
 
@@ -246,12 +255,52 @@ app.post('/api/notify', requireUser, wrap(async (req, res) => {
   if (!allowed) return json(res, 403, { error: 'not allowed to send that' });
   if (!throttle('mail:' + req.user.id, 60, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many emails in the last hour.' });
 
+  let text = String(req.body.body || '').slice(0, 8000);
+  const link = process.env.APP_URL || '';
+  let issued = null;
+
+  /* Somebody being given work for the first time has no way in yet. Rather than
+     make them wait for a separate invite, put the sign-in details in the same
+     message — one email, and they can act on it straight away. */
+  /* only worth sending sign-in details to somebody who can actually get in —
+     the gate needs work assigned against their name first */
+  if (!usesCode(target) && S.maySignIn(state, target).ok) {
+    const hasPassword = !!(await auth.getCredential(target.email));
+    if (!hasPassword) {
+      if (await auth.hasInvite(target.email)) {
+        text += '\n\n— Signing in —\n' + (link ? link + '\n' : '') +
+          'Your login is ' + target.email + '. Use the invite code you were already sent; if you no longer have it, ask for a new one.';
+      } else {
+        const inv = await auth.issueInvite(target.email);
+        issued = inv.code;
+        text += '\n\n— Signing in for the first time —\n' +
+          (link ? 'Open ' + link + '\n' : '') +
+          'Your login:  ' + target.email + '\n' +
+          'Invite code: ' + inv.code + '\n\n' +
+          'Enter the code once and choose your own password. It lasts ' + inv.days + ' days.';
+      }
+    }
+  }
+
   const out = await mailer.send({
     to: target.email,
     subject: String(req.body.subject || 'Terra Clean control tower').slice(0, 200),
-    text: String(req.body.body || '').slice(0, 8000) + '\n\n' + (process.env.APP_URL || '')
+    text: text + (link ? '\n\n' + link : '')
   });
-  json(res, 200, out);
+  json(res, 200, Object.assign({}, out, { invite: issued, provider: mailer.provider }));
+}));
+
+/* Send a test message, so email can be proved to work before it matters. */
+app.post('/api/mail/test', requireUser, requireAdmin, wrap(async (req, res) => {
+  const to = String(req.body.to || req.user.email || '').trim();
+  if (!to) return json(res, 400, { error: 'Give an address to send to.' });
+  if (!throttle('mailtest:' + req.user.id, 10, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many test messages. Wait an hour.' });
+  const out = await mailer.send({
+    to,
+    subject: 'Terra Clean control tower — test message',
+    text: 'This is a test from the Terra Clean control tower.\n\nIf you are reading it, assignment emails and invite codes will reach this address.\n\nSent via ' + mailer.provider + ', from ' + mailer.from + '.\n' + (process.env.APP_URL || '')
+  });
+  json(res, 200, Object.assign({}, out, { provider: mailer.provider, from: mailer.from, to }));
 }));
 
 /* ---------- backup, restore, reset ---------- */
@@ -296,6 +345,8 @@ app.get('/api/health', wrap(async (req, res) => {
     ok: true,
     storage: store.driverKind(),
     mail: mailer.configured,
+    mailProvider: mailer.provider,
+    mailFrom: mailer.from,
     standardTemplatePackages: wbsPresent,
     projects
   });
