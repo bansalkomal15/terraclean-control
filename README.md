@@ -5,22 +5,24 @@ decision queue, and daily and weekly trackers. The CEO sees everything; everyone
 else sees only what carries their name.
 
 **Sign-in is set per person, under Organisation.** Two things are chosen
-separately: whether someone has **full access** (sees the whole portfolio), and
+separately: whether someone has **full rights** (sees the whole portfolio), and
 **how they sign in**.
 
 | How they sign in | What happens |
 | --- | --- |
-| **One-time code** | A six-digit code is emailed each time. No password ever. Needs email that actually reaches them. |
-| **Password** | You issue an invite code once; they enter it and choose their own password. Nothing to email — pass the code on however you like. |
+| **Password** | Press **Send login** against their name. A password is set and you are handed the message — link, login, password — to send by Outlook, Teams or WhatsApp. Nothing has to arrive by email for them to get in. |
+| **One-time code** | A six-digit code is emailed on every sign-in. No password. Only where email is known to arrive. |
 
 Seeded to start with:
 
-- `bansalkomal15@gmail.com` — **Administrator**, full access, one-time code
-- **CEO** — full access, password. Put their real email in under Organisation,
-  click **Invite**, and send them the code.
+- `bansalkomal15@gmail.com` — **Administrator**, full rights, one-time code
+- `atul.parmar@indianoil.in` — **Atul Parmar**, CEO, full rights, password
 
-Both see exactly the same dashboard. Forgotten a password? Click **Invite**
-again — that resets it.
+Both see exactly the same dashboard. Forgotten a password? Press **Send login**
+again — that sets a new one.
+
+Assigning somebody their first project does the same by itself: the message
+carries the work *and* their login details together.
 
 ---
 
@@ -100,14 +102,15 @@ printed there whenever email is not working, so you are never locked out.
 
 ## Step 6 — Bring your team in
 
-1. **Organisation** → add each person's name, designation, department and email
-   (or load them all from an Excel file).
-2. Assign them something — a project to lead, or an activity in the breakdown.
-   Nobody can sign in until something carries their name.
-3. Back on **Organisation**, click **Invite** next to them. A code appears —
-   press **Copy a message to send** and paste it into WhatsApp or email.
-4. They open the link, type their email, enter the code, and choose their own
-   password.
+1. **Organisation** → **+ Add a person** opens a panel with the fields from your
+   own sheet: **E. No. · Name (S/Shri/ Ms) · Design. · I.Com · Mobile no. ·
+   Mail address**. Or load the whole list from an .xlsx, a .csv, or cells copied
+   out of Excel, using those same headings.
+2. Make them the owner of a project. Nobody can sign in until a project carries
+   their name.
+3. Press **Send login** next to them. A password is set and the message appears
+   with link, login and password — open it in Outlook or copy it for Teams.
+4. They open the link, type their email, then the password. Done.
 
 ## Updating it later
 
@@ -143,6 +146,9 @@ is no ownership below project level, so there is nothing to filter by.
 | Their own project, whole | ● | ● |
 | Offtake, enablers, directory, templates | ● | — |
 | Colleagues' email addresses | ● | — |
+
+**Workload** in the sidebar shows every person in the directory, what they own
+and what is open against their name.
 | Hand a project to somebody else | ● | — |
 
 This is enforced on the server, not in the browser. A member's page does not
@@ -151,6 +157,50 @@ checks exactly that, including that a member's data contains no unrelated
 package names and no colleague email addresses, and that a forged request
 trying to edit someone else's activity, grant themselves CEO access, delete a
 project or clear their own CEO request is thrown away.
+
+# How messages are sent
+
+Settings → **Email** offers three routes. The first is the default and needs no
+setup at all.
+
+| Route | What happens | Reaches a corporate domain |
+| --- | --- | --- |
+| **From my own mailbox** | Outlook opens with the message written — address, subject, body, login details. You press send. | Yes, always |
+| **Server first, my mailbox if it fails** | Tries automatically, falls back to a draft. | Yes |
+| **Server only** | Fully automatic. Needs `BREVO_API_KEY` set. | Only once a domain the business owns is verified |
+
+Sending *as* a Gmail address *to* a corporate domain is the thing that fails: the
+receiving filter sees a message claiming to come from `gmail.com` that arrived
+from somewhere else, and quarantines it silently. Sending from your own mailbox
+sidesteps that, which is why it is the default.
+
+Do not set `MAIL_FROM` to a company address you have not been authorised to send
+from. That is precisely what those filters exist to stop.
+
+# Templates
+
+Settings → **Templates**. Build a project the way you want it, copy it to a
+template, then apply it to any number of projects at once:
+
+- **Add what is missing** — existing lines keep their progress, dates and full
+  status history; only genuinely new lines are added, nothing is deleted.
+- **Replace** — throws the breakdown away and starts again.
+
+Change a template later and re-apply it, and the new lines flow into every
+project you pick without disturbing what is already recorded.
+
+# Adding projects in bulk
+
+Projects → **Add several**. One project per line:
+
+```
+Name | State | Solar MWp | Wind MW | BESS MWh
+```
+
+Vertical bars, tabs or commas all work, so a block copied out of a spreadsheet
+goes straight in. A name that already exists is not duplicated — tick the box and
+its capacity is corrected instead, keeping its breakdown, progress and history.
+**Fill in the substation list** loads the current portfolio.
 
 # How data is stored
 

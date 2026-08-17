@@ -54,14 +54,26 @@ async function api(method, url, body) {
    If somebody else saved first the server hands back the current picture and
    we redraw rather than overwrite their work. */
 let syncTimer = null, syncing = false, dirty = false;
-function save() { dirty = true; setSyncState('pending'); clearTimeout(syncTimer); syncTimer = setTimeout(flush, 600); }
+function save() {
+  _tpl = null;                      /* names may have changed; rebuild the path labels */
+  dirty = true; setSyncState('pending');
+  clearTimeout(syncTimer); syncTimer = setTimeout(flush, 600);
+}
+/* Pull the document again — used after the server changes something on its own
+   (setting a password, restoring a backup, cleaning up numbering). */
+async function reloadState() {
+  const out = await api('GET', '/api/state');
+  REV = out.rev; adoptState(out.state); render();
+}
 async function flush() {
   if (syncing || !dirty) return;
   syncing = true; dirty = false; setSyncState('saving');
   try {
     const out = await api('PUT', '/api/state', { rev: REV, state: S });
-    REV = out.rev; adoptState(out.state); setSyncState('saved');
-    render();
+    /* Keep our own objects. Replacing S here would orphan every reference an
+       open panel is holding, and the next edit in it would vanish. The server
+       has just merged exactly what we sent, so the two already agree. */
+    REV = out.rev; setSyncState('saved');
   } catch (e) {
     if (e.status === 409 && e.data) {
       REV = e.data.rev; adoptState(e.data.state); setSyncState('reloaded');
@@ -903,21 +915,30 @@ function addManyProjects() {
       out.push({
         name: c[0], state: c[1] || '',
         solar: +(c[2] || 0) || 0, wind: +(c[3] || 0) || 0, bess: +(c[4] || 0) || 0,
-        dupe: S.projects.some(p => p.name.trim().toLowerCase() === c[0].toLowerCase())
+        existing: S.projects.find(p => p.name.trim().toLowerCase() === c[0].toLowerCase()) || null
       });
     });
     return out;
   };
+  const upd = el('label', 'pickrow'); upd.style.borderBottom = '0';
+  upd.innerHTML = `<input type="checkbox" id="bulkUpd" checked style="width:auto">
+    <span><b>Correct the capacity on projects already here</b>
+    <div class="sub">A name that matches keeps its breakdown, progress and history — only the solar, wind and BESS figures are set from this list.</div></span>`;
+  b.appendChild(upd);
+
   const refresh = () => {
     const rows = parseLines();
-    const dupes = rows.filter(r => r.dupe).length;
-    const mw = rows.filter(r => !r.dupe).reduce((a, r) => a + r.solar + r.wind, 0);
+    const dupes = rows.filter(r => r.existing).length;
+    const mw = rows.filter(r => !r.existing).reduce((a, r) => a + r.solar + r.wind, 0);
+    const doUpd = (document.getElementById('bulkUpd') || {}).checked;
     preview.innerHTML = rows.length
       ? '<b>' + (rows.length - dupes) + '</b> to add' + (mw ? ', ' + mw.toFixed(1) + ' MW' : '') +
-        (dupes ? ' · <b>' + dupes + '</b> skipped, a project of that name already exists' : '')
+        (dupes ? ' · <b>' + dupes + '</b> already here' + (doUpd ? ', capacity will be corrected' : ', left alone') : '')
       : 'Nothing to add yet.';
   };
-  ta.oninput = refresh; refresh();
+  ta.oninput = refresh;
+  upd.querySelector('input').onchange = refresh;
+  refresh();
 
   const row = el('div', 'row');
   const fill = el('button', 'btn sm', 'Fill in the substation list');
@@ -925,8 +946,19 @@ function addManyProjects() {
   fill.onclick = () => { ta.value = SUBSTATION_LIST; refresh(); };
   const go = el('button', 'btn pri', 'Add them');
   go.onclick = () => {
-    const rows = parseLines().filter(r => !r.dupe);
-    if (!rows.length) { toast('Nothing new to add'); return; }
+    const all = parseLines();
+    const doUpd = (document.getElementById('bulkUpd') || {}).checked;
+    let fixed = 0;
+    if (doUpd) all.filter(r => r.existing).forEach(r => {
+      const p = r.existing;
+      p.solar = r.solar; p.wind = r.wind;
+      if (r.bess) p.bess = r.bess;
+      if (r.state) p.state = r.state;
+      p.setup = false; fixed++;
+    });
+    const rows = all.filter(r => !r.existing);
+    if (!rows.length && !fixed) { toast('Nothing to change'); return; }
+    if (!rows.length) { save(); closeDrawer(); render(); toast('Capacity corrected on ' + fixed + ' project(s)'); return; }
     let packages = [];
     if (tpl.value === '__std') packages = S.standardTemplate || [];
     else if (tpl.value) { const t = (S.templates || []).find(x => x.id === tpl.value); packages = t ? t.packages : []; }
@@ -940,13 +972,14 @@ function addManyProjects() {
       S.projects.push(p);
     });
     save(); closeDrawer(); render();
-    toast(rows.length + ' projects added');
+    toast(rows.length + ' projects added' + (fixed ? ', ' + fixed + ' corrected' : ''));
   };
   row.append(fill, go);
   b.appendChild(row);
 }
 
 const SUBSTATION_LIST = [
+  'Morena | Madhya Pradesh | 465 | 0',
   'Sisrana | Gujarat | 155 | 0',
   'Davanagere | Karnataka | 0 | 300',
   'Saurashtra | Gujarat | 0 | 100',
@@ -1125,7 +1158,7 @@ function ownerStrip(p, full) {
   if (canSet) {
     const sel = el('select'); sel.className = 'os-select';
     sel.innerHTML = '<option value="">— nobody yet —</option>' +
-      S.org.map(o => `<option value="${o.id}" ${p.head === o.id ? 'selected' : ''}>${esc(o.name)}${o.dept ? ' · ' + esc(o.dept) : ''}</option>`).join('');
+      S.org.map(o => `<option value="${o.id}" ${p.head === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
     sel.onchange = () => {
       const prev = p.head;
       p.head = sel.value; save();
@@ -1144,8 +1177,7 @@ function ownerStrip(p, full) {
   } else {
     left.appendChild(el('div', 'os-name', esc(lead ? lead.name : 'Nobody yet')));
   }
-  if (lead) left.appendChild(el('div', 'sub', esc([lead.designation, lead.dept].filter(Boolean).join(' · ') || lead.email || '')));
-  else left.appendChild(el('div', 'sub', 'Every project should have one person answerable for it.'));
+  if (!lead) left.appendChild(el('div', 'sub', 'Every project should have one person answerable for it.'));
   box.appendChild(left);
 
   if (lead) {
@@ -2092,88 +2124,62 @@ function viewOrg() {
   $('#crumb').textContent = 'Record'; $('#title').textContent = 'Organisation';
   const ta = $('#topActions'); ta.innerHTML = '';
   const add = el('button', 'btn pri', '+ Add a person');
-  add.onclick = () => { S.org.push({ id: uid(), name: 'New person', designation: '', dept: '', email: '', admin: false }); save(); render(); };
+  add.onclick = () => editPerson(null);
   ta.appendChild(add);
   const v = $('#view'); v.innerHTML = '';
 
   const t = el('table', 'tbl orgtbl');
-  t.innerHTML = '<thead><tr><th>Name</th><th>Designation</th><th>Department / function</th><th>Email — this is their login</th><th>How they sign in</th><th class="c">Full access</th><th class="r">Assigned</th><th></th></tr></thead>';
+  t.innerHTML = '<thead><tr><th>E. No.</th><th>Name</th><th>Design.</th><th>I.Com</th><th>Mobile no.</th><th>Mail address</th>' +
+    '<th>Sign-in</th><th class="c">Full rights</th><th class="r">Projects</th><th></th></tr></thead>';
   const tb = el('tbody');
   S.org.forEach(o => {
     const tr = el('tr');
-    const mk = (val, ph, k) => {
-      const i = el('input'); i.type = 'text'; i.className = 'inline'; i.value = val || ''; i.placeholder = ph;
-      i.onchange = () => { o[k] = i.value.trim(); save(); if (k === 'email' || k === 'name') render(); };
-      const td = el('td'); td.appendChild(i); return td;
-    };
-    tr.appendChild(mk(o.name, 'Full name', 'name'));
-    tr.appendChild(mk(o.designation, 'e.g. Vice President', 'designation'));
-    tr.appendChild(mk(o.dept, 'e.g. Land & revenue', 'dept'));
-    tr.appendChild(mk(o.email, 'name@terraclean.in', 'email'));
+    const cell = (val, cls) => { const td = el('td', cls || ''); td.textContent = val || '—'; return td; };
+    tr.appendChild(cell(o.empNo, 'num sub'));
+    const nm = el('td');
+    const lk = el('button', 'linkish', esc(o.name || '(unnamed)'));
+    lk.onclick = () => editPerson(o);
+    nm.appendChild(lk);
+    tr.appendChild(nm);
+    tr.appendChild(cell(o.designation, 'sub'));
+    tr.appendChild(cell(o.icom, 'num sub'));
+    tr.appendChild(cell(o.mobile, 'num sub'));
+    tr.appendChild(cell(o.email, 'sub'));
+    tr.appendChild(cell((o.signin || (o.admin ? 'code' : 'password')) === 'code' ? 'One-time code' : 'Password', 'sub'));
+    tr.appendChild(el('td', 'c', o.admin ? '<span class="tag ok">Yes</span>' : '<span class="sub">—</span>'));
+    tr.appendChild(cell(String(countAssigned(o.id)), 'num r'));
 
-    const sc = el('td');
-    const sel = el('select'); sel.className = 'inline';
-    const cur = o.signin || (o.admin ? 'code' : 'password');
-    sel.innerHTML = `<option value="password" ${cur === 'password' ? 'selected' : ''}>Password</option>
-                     <option value="code" ${cur === 'code' ? 'selected' : ''}>One-time code</option>`;
-    sel.title = 'Password: you give them an invite code once, they choose their own. One-time code: a code is emailed every time they sign in — only works if email reaches them.';
-    sel.onchange = () => { o.signin = sel.value; save(); render(); };
-    sc.appendChild(sel);
-    tr.appendChild(sc);
-
-    const ac = el('td', 'c');
-    const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!o.admin; cb.style.width = 'auto';
-    const lastAdmin = o.admin && S.org.filter(q => q.admin).length === 1;
-    /* you cannot revoke your own access, or the last remaining one — that would lock everybody out */
-    cb.disabled = (o.id === S.viewer) || lastAdmin;
-    cb.title = cb.disabled ? (o.id === S.viewer ? 'You cannot remove your own CEO access' : 'At least one person must keep CEO access') : 'Give this person the CEO view';
-    cb.onchange = () => {
-      if (cb.checked && !o.email) { cb.checked = false; toast('Give them an email address first — that is the login'); return; }
-      o.admin = cb.checked; save(); render();
-    };
-    ac.appendChild(cb); tr.appendChild(ac);
-    const n = countAssigned(o.id);
-    tr.appendChild(el('td', 'r num' + (n ? '' : ' sub'), String(n)));
-    const rm = el('td', 'r');
-    if ((o.signin || (o.admin ? 'code' : 'password')) === 'password' && o.email) {
-      const inv = el('button', 'btn ghost sm', 'Invite');
-      inv.title = 'Issue a code so they can set their own password. Also resets a forgotten one.';
-      inv.onclick = async () => {
-        if (!confirm('Issue an invite code for ' + o.name + '?\n\nIf they already have a password, it stops working and they set a new one.')) return;
-        try {
-          const out = await api('POST', '/api/org/invite', { personId: o.id });
-          showInvite(o, out);
-        } catch (e) { toast(e.message); }
-      };
-      rm.appendChild(inv);
+    const act = el('td', 'r');
+    if (o.email && (o.signin || (o.admin ? 'code' : 'password')) === 'password') {
+      const s = el('button', 'btn ghost sm', 'Send login');
+      s.title = 'Set a password and hand you the message to send them';
+      s.onclick = () => sendLogin(o);
+      act.appendChild(s);
     }
-    const x = el('button', 'btn ghost sm', 'Remove');
-    x.disabled = o.id === S.viewer;
-    x.onclick = () => {
-      if (!confirm('Remove ' + o.name + '? Their assignments become unassigned.')) return;
-      S.org = S.org.filter(q => q.id !== o.id);
-      S.projects.forEach(p => { if (p.head === o.id) p.head = ''; });
-      S.tasks.forEach(z => { if (z.owner === o.id) z.owner = ''; });
-      save(); render();
-    };
-    rm.appendChild(x); tr.appendChild(rm);
+    const e = el('button', 'btn ghost sm', 'Edit');
+    e.onclick = () => editPerson(o);
+    act.appendChild(e);
+    tr.appendChild(act);
     tb.appendChild(tr);
   });
   t.appendChild(tb);
-  v.appendChild(section('Directory', 'Name, designation, department and email. The email address is the login — only people listed here can sign in, and only once something is assigned to them. Tick CEO access for anyone who should see the full portfolio.', t));
+  v.appendChild(section('Directory', 'The email address is the login. Add someone, make them a project owner, then send them their login.', t));
 
   /* --- import --- */
   const imp = el('div');
-  imp.innerHTML = `<p class="sub" style="margin-top:0">Load your list from Excel. Give it four columns — <b>Name</b>, <b>Designation</b>, <b>Department</b>, <b>Email</b> — in any order; the header row is read by name. An .xlsx file, a .csv, or cells copied straight out of Excel all work.</p>`;
+  imp.innerHTML = `<p class="sub" style="margin-top:0">Load the list straight from your sheet. Use these column headings, in any order:</p>
+    <div class="fmtline">E. No. │ Name (S/Shri/ Ms) │ Design. │ I.Com │ Mobile no. │ Mail address</div>
+    <p class="sub">An .xlsx file, a .csv, or cells copied out of Excel all work. Matching is by mail address — an address already here is updated, a new one is added, nothing is deleted.</p>`;
   const row = el('div', 'row');
   const fi = el('input'); fi.type = 'file'; fi.accept = '.xlsx,.csv,.txt'; fi.style.display = 'none';
   const pick = el('button', 'btn pri', 'Choose an Excel or CSV file'); pick.onclick = () => fi.click();
   const tpl = el('button', 'btn', 'Download the template');
   tpl.onclick = () => {
-    const csv = 'Name,Designation,Department,Email\nA. Sharma,Vice President,Land & revenue,a.sharma@terraclean.in\n';
-    const a = document.createElement('a');
-    a.href = window.URL['createObjectURL'](new Blob([csv], { type: 'text/csv' }));
-    a.download = 'terraclean-organisation-template.csv'; a.click();
+    const csv = 'E. No.,Name (S/Shri/ Ms),Design.,I.Com,Mobile no.,Mail address\n' +
+      '10234,Shri A K Sharma,DGM (Land),2345,98100 00000,ak.sharma@indianoil.in\n';
+    const a2 = document.createElement('a');
+    a2.href = window.URL['createObjectURL'](new Blob([csv], { type: 'text/csv' }));
+    a2.download = 'terraclean-organisation-template.csv'; a2.click();
   };
   row.append(pick, tpl, fi);
   imp.appendChild(row);
@@ -2201,42 +2207,106 @@ function viewOrg() {
       ingest(rows);
     } catch (e) {
       out.innerHTML = '';
-      out.appendChild(el('div', 'empty', 'That file could not be read (' + (e.message || e) + '). If it is an old .xls, save it again as .xlsx or .csv, or copy the cells and paste them into the box below.'));
+      out.appendChild(el('div', 'empty', 'That file could not be read (' + (e.message || e) + '). Save it again as .xlsx or .csv, or copy the cells and paste them below.'));
     }
   };
-  v.appendChild(section('Load the list from Excel', 'Matching is by email — an address already in the directory is updated, a new one is added. Nothing is deleted.', imp));
+  v.appendChild(section('Load the list from your sheet', '', imp));
 }
-function showInvite(person, out) {
-  const d = openDrawerEl(dHead('Organisation', 'Invite code for ' + person.name) + '<div class="dbody" id="db"></div>');
+
+/* Adding or editing somebody happens in a panel, not by typing into a blank row. */
+function editPerson(o) {
+  const isNew = !o;
+  o = o || { id: uid(), empNo: '', name: '', designation: '', icom: '', mobile: '', email: '', dept: '', admin: false, signin: 'password' };
+  const d = openDrawerEl(dHead('Organisation', isNew ? 'Add a person' : o.name || 'Person') + '<div class="dbody" id="db"></div>');
   wireClose(d);
   const b = document.getElementById('db');
   b.innerHTML = `
-    <p class="sub" style="margin-top:0">${out.emailed
-      ? 'This code has been emailed to <b>' + esc(person.email) + '</b>. Send it another way too if you like — it is safe to read out.'
-      : 'Mail is not set up on the server, so pass this on yourself — WhatsApp, a call, however you like.'}</p>
-    <div class="invitecode">${esc(out.code)}</div>
-    <div class="dsec">
-      <h4>What they do</h4>
-      <ol class="steps">
-        <li>Open the link to the control tower.</li>
-        <li>Type their email: <b>${esc(person.email)}</b></li>
-        <li>Enter this invite code and choose their own password.</li>
-      </ol>
-      <div class="sub">The code lasts ${out.days} days and works once. Issue a new one any time — that is also how you reset a forgotten password.</div>
+    <div class="grid2">
+      <label class="fld"><span>E. No.</span><input type="text" id="fNo" value="${esc(o.empNo || '')}"></label>
+      <label class="fld"><span>Design.</span><input type="text" id="fDes" value="${esc(o.designation || '')}" placeholder="e.g. DGM (Land)"></label>
+    </div>
+    <label class="fld"><span>Name (S/Shri/ Ms)</span><input type="text" id="fName" value="${esc(o.name || '')}" placeholder="Shri A K Sharma"></label>
+    <div class="grid2">
+      <label class="fld"><span>I.Com</span><input type="text" id="fIcom" value="${esc(o.icom || '')}"></label>
+      <label class="fld"><span>Mobile no.</span><input type="text" id="fMob" value="${esc(o.mobile || '')}"></label>
+    </div>
+    <label class="fld"><span>Mail address — this is their login</span><input type="text" id="fMail" value="${esc(o.email || '')}" placeholder="name@indianoil.in"></label>
+    <div class="grid2">
+      <label class="fld"><span>How they sign in</span><select id="fSign">
+        <option value="password" ${(o.signin || 'password') === 'password' ? 'selected' : ''}>Password — you send it to them</option>
+        <option value="code" ${o.signin === 'code' ? 'selected' : ''}>One-time code by email</option>
+      </select></label>
+      <label class="fld"><span>Full rights</span><select id="fAdmin">
+        <option value="no" ${o.admin ? '' : 'selected'}>No — only their own projects</option>
+        <option value="yes" ${o.admin ? 'selected' : ''}>Yes — the whole portfolio</option>
+      </select></label>
     </div>`;
-  const copy = el('button', 'btn pri', 'Copy the code');
-  copy.onclick = () => {
-    navigator.clipboard.writeText(out.code).then(() => toast('Copied'), () => toast('Select it and copy manually'));
+  const row = el('div', 'row');
+  const ok = el('button', 'btn pri', isNew ? 'Add' : 'Save');
+  ok.onclick = () => {
+    const name = document.getElementById('fName').value.trim();
+    if (!name) { toast('Give them a name'); return; }
+    Object.assign(o, {
+      empNo: document.getElementById('fNo').value.trim(),
+      name, designation: document.getElementById('fDes').value.trim(),
+      icom: document.getElementById('fIcom').value.trim(),
+      mobile: document.getElementById('fMob').value.trim(),
+      email: document.getElementById('fMail').value.trim(),
+      signin: document.getElementById('fSign').value,
+      admin: document.getElementById('fAdmin').value === 'yes'
+    });
+    if (o.admin && !o.email) { o.admin = false; toast('Full rights need an email address — that is the login'); }
+    if (isNew) S.org.push(o);
+    save(); closeDrawer(); render();
+    toast(isNew ? 'Added' : 'Saved');
   };
-  const msg = el('button', 'btn', 'Copy a message to send');
-  msg.onclick = () => {
-    const text = 'Hello ' + person.name + ',\n\nYou have access to the Terra Clean control tower.\n\nLink: ' + location.origin +
-      '\nYour login: ' + person.email + '\nInvite code: ' + out.code +
-      '\n\nOpen the link, type your email, then enter the code and choose your own password.';
-    navigator.clipboard.writeText(text).then(() => toast('Message copied'), () => toast('Could not copy'));
-  };
-  const row = el('div', 'row'); row.append(copy, msg);
+  row.appendChild(ok);
+  if (!isNew) {
+    if (o.email && (o.signin || 'password') === 'password') {
+      const sl = el('button', 'btn', 'Send them their login');
+      sl.onclick = () => sendLogin(o);
+      row.appendChild(sl);
+    }
+    const del = el('button', 'btn ghost', 'Remove');
+    del.disabled = o.id === S.viewer;
+    del.onclick = () => {
+      if (!confirm('Remove ' + o.name + '? Any project they own becomes unowned.')) return;
+      S.org = S.org.filter(q => q.id !== o.id);
+      S.projects.forEach(p => { if (p.head === o.id) p.head = ''; });
+      S.tasks.forEach(z => { if (z.owner === o.id) z.owner = ''; });
+      save(); closeDrawer(); render();
+    };
+    row.appendChild(del);
+  }
   b.appendChild(row);
+}
+
+/* Sets a password and hands over the message — no invite step, nothing for
+   them to choose before they can get in. */
+function sendLogin(o) {
+  api('POST', '/api/org/login-mail', { personId: o.id })
+    .then(r => {
+      const d = openDrawerEl(dHead('Organisation', 'Login for ' + esc(o.name)) + '<div class="dbody" id="db"></div>');
+      wireClose(d);
+      const b = document.getElementById('db');
+      b.innerHTML = `<p class="sub" style="margin-top:0">A password has been set. Send them this — it is everything they need.</p>
+        <div class="loginpair">
+          <div><span>Link</span><b>${esc(location.origin)}</b></div>
+          <div><span>Login</span><b>${esc(r.to)}</b></div>
+          <div><span>Password</span><b class="pw">${esc(r.password)}</b></div>
+        </div>
+        <div class="draftbox"><b>${esc(r.subject)}</b><pre>${esc(r.text)}</pre></div>`;
+      const row = el('div', 'row');
+      const mail = el('button', 'btn pri', 'Open a draft in my mail app');
+      mail.onclick = () => openDraft(r);
+      const copy = el('button', 'btn', 'Copy the message');
+      copy.onclick = () => navigator.clipboard.writeText(r.subject + '\n\n' + r.text)
+        .then(() => toast('Copied'), () => toast('Could not copy'));
+      row.append(mail, copy);
+      b.appendChild(row);
+      reloadState().catch(() => render());
+    })
+    .catch(e => toast(e.message));
 }
 
 function countAssigned(id) {
@@ -2248,24 +2318,30 @@ function mergeOrg(rows) {
   if (!rows || rows.length < 2) return { err: 'No rows found. The first row should be the headers: Name, Designation, Department, Email.' };
   const head = rows[0].map(h => String(h || '').trim().toLowerCase());
   const find = keys => head.findIndex(h => keys.some(k => h.includes(k)));
+  const iNo = find(['e. no', 'e.no', 'eno', 'emp']);
   const iName = find(['name', 'person', 'employee']);
-  const iDesig = find(['designation', 'title', 'grade', 'role']);
+  const iDesig = find(['design', 'title', 'grade', 'role']);
+  const iIcom = find(['i.com', 'icom', 'intercom', 'extension']);
+  const iMob = find(['mobile', 'phone', 'cell']);
   const iDept = find(['department', 'dept', 'function', 'vertical']);
-  const iMail = find(['email', 'mail', 'id']);
-  if (iName < 0 || iMail < 0) return { err: 'Could not find a Name column and an Email column in the header row. Headers found: ' + head.join(', ') };
+  const iMail = find(['mail address', 'email', 'e-mail', 'mail']);
+  if (iName < 0 || iMail < 0) return { err: 'Could not find a Name column and a Mail address column in the header row. Headers found: ' + head.join(', ') };
   let added = 0, updated = 0;
   rows.slice(1).forEach(r => {
     const name = String(r[iName] || '').trim(), email = String(r[iMail] || '').trim();
     if (!name && !email) return;
     const rec = {
       name: name || email,
+      empNo: iNo >= 0 ? String(r[iNo] || '').trim() : '',
       designation: iDesig >= 0 ? String(r[iDesig] || '').trim() : '',
+      icom: iIcom >= 0 ? String(r[iIcom] || '').trim() : '',
+      mobile: iMob >= 0 ? String(r[iMob] || '').trim() : '',
       dept: iDept >= 0 ? String(r[iDept] || '').trim() : '',
       email: email
     };
     const ex = email ? orgByEmail(email) : null;
     if (ex) { Object.assign(ex, rec); updated++; }
-    else { S.org.push(Object.assign({ id: uid(), admin: false }, rec)); added++; }
+    else { S.org.push(Object.assign({ id: uid(), admin: false, signin: 'password' }, rec)); added++; }
   });
   if (!added && !updated) return { err: 'No usable rows. Check that Name and Email are filled in.' };
   return { added, updated };
@@ -2339,7 +2415,7 @@ async function readXlsx(buf) {
 /* ===================== PEOPLE ===================== */
 let PEOPLE_OPEN = {};
 function viewPeople() {
-  $('#crumb').textContent = 'Record'; $('#title').textContent = 'People';
+  $('#crumb').textContent = 'Record'; $('#title').textContent = 'Workload assessment';
   $('#topActions').innerHTML = '';
   const v = $('#view'); v.innerHTML = '';
 
@@ -2403,7 +2479,7 @@ function viewPeople() {
     }
   });
   t.appendChild(tb);
-  v.appendChild(section('Who is carrying what', 'Every person in the directory, the projects they touch and the count of activities and tasks against their name. Open a row to see the list.', t));
+  v.appendChild(section('Who is carrying what', 'Every person in the directory, what they own and what is open against their name. Open a row to see the list.', t));
 }
 
 /* ===================== PROJECT EDIT ===================== */

@@ -267,18 +267,16 @@ app.post('/api/notify', requireUser, wrap(async (req, res) => {
   if (!usesCode(target) && S.maySignIn(state, target).ok) {
     const hasPassword = !!(await auth.getCredential(target.email));
     if (!hasPassword) {
-      if (await auth.hasInvite(target.email)) {
-        text += '\n\n— Signing in —\n' + (link ? link + '\n' : '') +
-          'Your login is ' + target.email + '. Use the invite code you were already sent; if you no longer have it, ask for a new one.';
-      } else {
-        const inv = await auth.issueInvite(target.email);
-        issued = inv.code;
-        text += '\n\n— Signing in for the first time —\n' +
-          (link ? 'Open ' + link + '\n' : '') +
-          'Your login:  ' + target.email + '\n' +
-          'Invite code: ' + inv.code + '\n\n' +
-          'Enter the code once and choose your own password. It lasts ' + inv.days + ' days.';
-      }
+      /* first time they are given anything: set a password and send it with the
+         link, so one message is all they need */
+      const pw = auth.generatePassword();
+      await auth.setCredential(target.email, pw);
+      issued = pw;
+      text += '\n\n— Signing in —\n' +
+        (link ? 'Open ' + link + '\n' : '') +
+        'Your login: ' + target.email + '\n' +
+        'Password:   ' + pw + '\n\n' +
+        'You can change the password once you are in, under Settings.';
     }
   }
 
@@ -294,6 +292,39 @@ app.post('/api/notify', requireUser, wrap(async (req, res) => {
 
   const out = await mailer.send({ to: target.email, subject, text: body });
   json(res, 200, Object.assign({}, out, { invite: issued, provider: mailer.provider }));
+}));
+
+/* Set a password for somebody and hand back the message to send them. */
+app.post('/api/org/login-mail', requireUser, requireAdmin, wrap(async (req, res) => {
+  const { rev, state } = await store.readDoc();
+  const target = S.personById(state, String(req.body.personId || ''));
+  if (!target) return json(res, 404, { error: 'no such person' });
+  if (!target.email) return json(res, 400, { error: 'Give them an email address first — that is their login.' });
+
+  const pw = String(req.body.password || '').trim() || auth.generatePassword();
+  const problem = auth.passwordProblem(pw);
+  if (problem) return json(res, 400, { error: problem });
+
+  await auth.setCredential(target.email, pw);
+  await auth.clearInvite(target.email);
+  target.signin = 'password';
+  await store.writeDoc(rev, state);
+
+  const link = process.env.APP_URL || '';
+  const subject = 'Terra Clean control tower — your login';
+  const text = 'Hello ' + target.name + ',\n\nYou have access to the Terra Clean control tower.\n\n' +
+    (link ? 'Open:     ' + link + '\n' : '') +
+    'Login:    ' + target.email + '\n' +
+    'Password: ' + pw + '\n\n' +
+    'Type your email, press Continue, then enter this password.\n' +
+    'You can change it afterwards under Settings.\n\n— Terra Clean control tower';
+
+  const wants = String(req.body.mode || 'compose');
+  if (wants === 'send') {
+    const out = await mailer.send({ to: target.email, subject, text });
+    return json(res, 200, Object.assign({ password: pw, to: target.email, subject, text }, out));
+  }
+  json(res, 200, { composed: true, password: pw, to: target.email, subject, text });
 }));
 
 /* Send a test message, so email can be proved to work before it matters. */

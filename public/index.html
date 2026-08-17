@@ -363,6 +363,14 @@ body.locked .app{display:none}
 .draftbox b{display:block;padding-bottom:8px;border-bottom:1px solid var(--line-soft);margin-bottom:10px;font-size:13.5px}
 .draftbox pre{margin:0;font-family:var(--sans);font-size:13px;white-space:pre-wrap;line-height:1.6;color:var(--muted)}
 
+
+.loginpair{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:10px 0 16px;align-items:baseline}
+.loginpair>div{display:contents}
+.loginpair span{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.loginpair b{font-size:14.5px;overflow-wrap:anywhere}
+.loginpair b.pw{font-size:19px;letter-spacing:.04em;background:var(--nyanza);padding:3px 9px;border-radius:2px}
+.orgtbl td{vertical-align:middle;padding:8px}
+
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -382,7 +390,7 @@ body.locked .app{display:none}
         <button data-v="enablers">Enablers</button>
       </div>
       <div class="navgrp"><i>Record</i>
-        <button data-v="people">People</button>
+        <button data-v="people">Workload</button>
         <button data-v="org">Organisation</button>
         <button data-v="settings">Settings</button>
       </div>

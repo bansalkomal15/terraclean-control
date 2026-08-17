@@ -41,8 +41,8 @@ module.exports = function seed() {
      signin: 'password' — an invite code once, then their own password
      Both can hold admin rights; the two are independent. */
   const org = [
-    { id: 'admin', name: adminName, designation: 'Administrator', dept: 'Executive', email: adminEmail, admin: true, signin: 'code' },
-    { id: 'ceo', name: 'CEO', designation: 'Chief Executive Officer', dept: 'Executive', email: '', admin: true, signin: 'password' },
+    { id: 'admin', empNo: '', name: adminName, designation: 'Administrator', icom: '', mobile: '', dept: 'Executive', email: adminEmail, admin: true, signin: 'code' },
+    { id: 'ceo', empNo: '', name: 'Atul Parmar', designation: 'Chief Executive Officer', icom: '', mobile: '', dept: 'Executive', email: 'atul.parmar@indianoil.in', admin: true, signin: 'password' },
     { id: 'p1', name: 'A. Sharma', designation: '', dept: 'Land & revenue', email: '', signin: 'password' },
     { id: 'p2', name: 'B. Nair', designation: '', dept: 'Regulatory & connectivity', email: '', signin: 'password' },
     { id: 'p3', name: 'C. Patel', designation: '', dept: 'Procurement', email: '', signin: 'password' },
