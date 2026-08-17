@@ -55,23 +55,52 @@ module.exports = function seed() {
     { id: 'p10', name: 'K. Menon', designation: '', dept: 'Quality & commissioning', email: '', signin: 'password' }
   ];
 
-  const morena = newProject({
-    name: 'Morena', site: 'Morena', state: 'Madhya Pradesh', solar: 300, wind: 0, bess: 0,
-    cod: '2028-06', head: 'p8', setup: false,
-    packages: clonePackages(WBS.packages, true), baseline: WBS.curve
-  });
-  const gujarat = newProject({
-    name: 'Gujarat Bhalgamada', site: 'Bhalgamada', state: 'Gujarat',
-    solar: 150, wind: 100, bess: 200, cod: '2028-12', head: 'p9', setup: false
-  });
-  const rest = [3, 4, 5, 6, 7, 8].map(i => newProject({ name: 'Project ' + i }));
-  const projects = [morena, gujarat].concat(rest);
+  /* The live portfolio, from the substation and PPA tables.
+     Morena keeps the detailed breakdown and S-curve from the original plan;
+     the rest start on the same standard breakdown, ready to be shaped. */
+  const PORTFOLIO = [
+    { name: 'Morena', state: 'Madhya Pradesh', solar: 465, wind: 0 },
+    { name: 'Sisrana', state: 'Gujarat', solar: 155, wind: 0 },
+    { name: 'Davanagere', state: 'Karnataka', solar: 0, wind: 300 },
+    { name: 'Saurashtra', state: 'Gujarat', solar: 0, wind: 100 },
+    { name: 'Ananthapuram III – ISTS', state: 'Andhra Pradesh', solar: 465, wind: 0 },
+    { name: 'Krishnagiri PS (Kurnool V) – ISTS', state: 'Andhra Pradesh', solar: 542.5, wind: 0 },
+    { name: 'Bhachau/Lakhadia II – ISTS', state: 'Gujarat', solar: 0, wind: 249.1 },
+    { name: 'Pali – ISTS', state: 'Rajasthan', solar: 240.3, wind: 0 },
+    { name: 'Khavda VII – ISTS', state: 'Gujarat', solar: 387.5, wind: 100 },
+    { name: 'Solapur – ISTS', state: 'Maharashtra', solar: 465, wind: 0 },
+    { name: 'Ananthapuram III (Ph-2) – ISTS', state: 'Andhra Pradesh', solar: 930, wind: 0 },
+    { name: 'Bhalgamda, Morbi – InSTS', state: 'Gujarat', solar: 465, wind: 0 },
+    { name: 'Sahjahanpur, Jalaun – InSTS', state: 'Uttar Pradesh', solar: 125.6, wind: 0 },
+    { name: 'Purakalan, Lalitpur – InSTS', state: 'Uttar Pradesh', solar: 37.2, wind: 0 },
+    { name: 'Jamgaon – InSTS', state: 'Maharashtra', solar: 77.5, wind: 50 },
+    { name: 'Karur – InSTS', state: 'Tamil Nadu', solar: 77.5, wind: 50 }
+  ];
+
+  const projects = PORTFOLIO.map((row, i) => newProject({
+    name: row.name,
+    site: row.name.split(/[,–]/)[0].trim(),
+    state: row.state,
+    solar: row.solar,
+    wind: row.wind,
+    bess: 0,
+    setup: false
+  }));
+
+  /* Morena is the one with real progress recorded against it */
+  const morena = projects[0];
+  morena.packages = clonePackages(WBS.packages, true);
+  morena.baseline = WBS.curve;
+  morena.cod = '2028-06';
+  morena.site = 'Morena';
+
   projects.forEach(p => applyCodes(p.packages));
 
   return {
     v: 5,
     numbered: true,
     notifyOnAssign: true,
+    mailSend: 'self',   /* drafts open in the sender's own mailbox by default */
     watch: ['A', 'B'],
     statuses: ['Not started', 'In progress', 'Applied', 'Submitted', 'Under review', 'Approved', 'Granted', 'Executed', 'On hold', 'Delayed'],
     standardTemplate: templateFrom(applyCodes(clonePackages(WBS.packages, false))),

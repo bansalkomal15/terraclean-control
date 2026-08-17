@@ -12,10 +12,7 @@ lead.email='h.singh@x.in'; member.email='k.menon@x.in'; stranger.email='f.khan@x
 
 const morena = state.projects[0], gujarat = state.projects[1];
 morena.head = lead.id;
-// give the member three leaves inside package B
-let c=0; (function rec(n){ if(!n.children.length){ if(c<3){ n.owner=member.id; c++; } return; } n.children.forEach(rec); })(morena.packages[1]);
-const ownedIds = []; S.walkAll(morena, n=>{ if(n.owner===member.id) ownedIds.push(n.id); });
-morena.chg=[{id:'c1',date:'2026-08-01',item:'Land requirement',path:S.codePath(morena, ownedIds[0]),from:'a',to:'b',impact:'Scope',by:'CEO'},
+morena.chg=[{id:'c1',date:'2026-08-01',item:'Land requirement',path:'B/2',from:'a',to:'b',impact:'Scope',by:'CEO'},
             {id:'c2',date:'2026-07-01',item:'Board note',path:'',from:'x',to:'y',impact:'Cost',by:'CEO'}];
 state.tasks=[{id:'t1',title:'CEO private task',owner:'',projectId:gujarat.id,due:'2026-08-16',urgency:'High',done:false,by:'CEO'},
              {id:'t2',title:'Member task',owner:member.id,projectId:morena.id,due:'2026-08-16',urgency:'Low',done:false,by:'K. Menon'}];
@@ -30,94 +27,90 @@ ok(!S.maySignIn(state, S.personByEmail(state,'nobody@x.in')).ok, 'unknown email 
 
 console.log('— what leaves the server (reads) —');
 const asCeo = S.pruneForUser(state, ceo);
-ok(asCeo.projects.length===8, 'CEO gets all 8 projects');
-ok(asCeo.deals.length===2 && asCeo.enablers.length===4, 'CEO gets deals and enablers');
+ok(asCeo.projects.length===state.projects.length, 'admin gets every project');
+ok(asCeo.deals.length===2 && asCeo.enablers.length===4, 'admin gets deals and enablers');
 
-const asLead = S.pruneForUser(state, lead);
-ok(asLead.projects.length===1 && asLead.projects[0].name==='Morena', 'lead gets only their project');
-let leadNodes=0; S.walkAll(asLead.projects[0], ()=>leadNodes++);
-ok(leadNodes>200, 'lead gets the whole tree ('+leadNodes+' nodes)');
-ok(asLead.deals.length===0, 'lead gets no offtake data');
-ok(asLead.org.every(p=>p.id===lead.id||!p.email), 'lead receives no other email addresses');
+const asOwner = S.pruneForUser(state, lead);
+ok(asOwner.projects.length===1 && asOwner.projects[0].name==='Morena', 'an owner gets only their project');
+let ownerNodes=0; S.walkAll(asOwner.projects[0], ()=>ownerNodes++);
+ok(ownerNodes>200, 'an owner gets their project whole ('+ownerNodes+' items)');
+ok(asOwner.deals.length===0, 'an owner gets no offtake data');
+ok(asOwner.org.every(p=>p.id===lead.id||!p.email), 'an owner receives no other email addresses');
 
-const asMember = S.pruneForUser(state, member);
-ok(asMember.projects.length===1, 'member gets only Morena');
-let names=[]; S.walkAll(asMember.projects[0], n=>names.push(n.name));
-ok(names.length===5, 'member gets 5 lines, not 263 (got '+names.length+')');
-ok(asMember.projects[0].packages.length===1, 'other packages are absent entirely');
-ok(!asMember.projects[0].baseline, 'no baseline curve for a member');
-ok(asMember.projects[0].chg.length===1 && asMember.projects[0].chg[0].id==='c1', 'only changes on their own lines');
-ok(asMember.tasks.length===1 && asMember.tasks[0].id==='t2', 'other people\'s tasks are absent');
-const json = JSON.stringify(asMember);
-ok(!json.includes('SOLAR MODULES'), 'no unrelated package names in the payload at all');
-ok(!json.includes('h.singh@x.in'), 'no colleague email addresses in the payload');
+const asOther = S.pruneForUser(state, member);
+ok(asOther.projects.length===0, 'somebody who owns no project is sent no project at all');
+const json = JSON.stringify(asOther);
+ok(!json.includes('SOLAR MODULES'), 'no package names reach them');
+ok(!json.includes('h.singh@x.in'), 'no colleague email addresses reach them');
 
 console.log('— what the server accepts (writes) —');
 const clone = o=>JSON.parse(JSON.stringify(o));
 
-// member tries to edit someone else's activity
+// the owner runs their own project outright
 let evil = clone(state);
-let victim=null; S.walkAll(evil.projects[0], n=>{ if(!victim && !n.children.length && n.owner!==member.id) victim=n; });
-const victimProgBefore = victim.prog; victim.prog = (victim.prog===1?0.5:1); victim.name='HACKED';
-let merged = S.mergeForUser(state, evil, member);
-let check=null; S.walkAll(merged.projects[0], n=>{ if(n.id===victim.id) check=n; });
-ok(check.name!=='HACKED' && check.prog===victimProgBefore, 'member cannot edit an activity that is not theirs');
+evil.projects[0].name='Morena Phase II';
+evil.projects[0].packages[0].name='RENAMED BY OWNER';
+evil.projects[1].name='SHOULD NOT CHANGE';
+let merged = S.mergeForUser(state, evil, lead);
+ok(merged.projects[0].name==='Morena Phase II', 'owner can rename their project');
+ok(merged.projects[0].packages[0].name==='RENAMED BY OWNER', 'owner can restructure their project');
+ok(merged.projects[1].name!=='SHOULD NOT CHANGE', 'owner cannot touch another project');
 
-// member edits their own activity
+// but cannot hand it on, or promote themselves
 evil = clone(state);
-let own=null; S.walkAll(evil.projects[0], n=>{ if(!own && n.owner===member.id) own=n; });
-own.prog = 0.5; own.desc='mine';
-merged = S.mergeForUser(state, evil, member);
-S.walkAll(merged.projects[0], n=>{ if(n.id===own.id) check=n; });
-ok(check.prog===0.5 && check.desc==='mine', 'member can edit their own activity');
+evil.projects[0].head='someone-else';
+evil.org.find(p=>p.id===lead.id).admin = true;
+merged = S.mergeForUser(state, evil, lead);
+ok(merged.projects[0].head===lead.id, 'owner cannot hand their project to somebody else');
+ok(!merged.org.find(p=>p.id===lead.id).admin, 'owner cannot grant themselves full access');
 
-// member tries to become an administrator
+// somebody with no project cannot change one
 evil = clone(state);
-evil.org.find(p=>p.id===member.id).admin = true;
+evil.projects[0].name='HACKED';
 merged = S.mergeForUser(state, evil, member);
-ok(!merged.org.find(p=>p.id===member.id).admin, 'member cannot grant themselves CEO access');
+ok(merged.projects[0].name!=='HACKED', 'a non-owner cannot change a project');
 
-// member tries to rewrite the directory / delete a project / edit offtake
+// directory, offtake and enablers stay with administrators
 evil = clone(state);
 evil.org.push({id:'zz',name:'Ghost',email:'ghost@x.in',admin:true});
 evil.projects.splice(1,1);
 evil.deals[0].capTalks = 9999;
 evil.enablers[0].status='Done';
-merged = S.mergeForUser(state, evil, member);
-ok(merged.org.length===state.org.length, 'member cannot add people');
-ok(merged.projects.length===8, 'member cannot delete a project');
-ok(merged.deals[0].capTalks!==9999, 'member cannot touch offtake');
-ok(merged.enablers[0].status!=='Done', 'member cannot close an enabler');
+merged = S.mergeForUser(state, evil, lead);
+ok(merged.org.length===state.org.length, 'owner cannot add people');
+ok(merged.projects.length===state.projects.length, 'owner cannot delete a project');
+ok(merged.deals[0].capTalks!==9999, 'owner cannot touch offtake');
+ok(merged.enablers[0].status!=='Done', 'owner cannot close an enabler');
 
-// member tries to clear their own CEO request
+// own tasks and own CEO requests
 evil = clone(state); evil.asks[0].status='done';
 merged = S.mergeForUser(state, evil, member);
-ok(merged.asks[0].status==='open', 'member cannot clear an item raised with the CEO');
-
-// member tries to steal another person's task
+ok(merged.asks[0].status==='open', 'nobody but an admin clears an item raised with the CEO');
 evil = clone(state); evil.tasks[0].title='STOLEN'; evil.tasks[0].owner=member.id;
 merged = S.mergeForUser(state, evil, member);
-ok(merged.tasks.find(t=>t.id==='t1').title==='CEO private task', 'member cannot rewrite a task that is not theirs');
+ok(merged.tasks.find(t=>t.id==='t1').title==='CEO private task', 'cannot rewrite somebody else\'s task');
 
-// lead has full control of their own project but not another
-evil = clone(state);
-evil.projects[0].name='Morena Phase II';
-evil.projects[0].packages[0].name='RENAMED BY LEAD';
-evil.projects[1].name='SHOULD NOT CHANGE';
-merged = S.mergeForUser(state, evil, lead);
-ok(merged.projects[0].name==='Morena Phase II', 'lead can rename their project');
-ok(merged.projects[0].packages[0].name==='RENAMED BY LEAD', 'lead can restructure their project');
-ok(merged.projects[1].name!=='SHOULD NOT CHANGE', 'lead cannot touch another project');
-
-// last administrator cannot be removed
+// the last administrator is protected
 evil = clone(state); evil.org.forEach(p=>p.admin=false);
 merged = S.mergeForUser(state, evil, ceo);
 ok(merged.org.some(p=>p.admin), 'the last administrator is protected');
 
-// CEO can do the lot
+// an admin can do the lot
 evil = clone(state); evil.projects[3].name='Rajasthan Phase I'; evil.deals[0].capTalks=250;
 merged = S.mergeForUser(state, evil, ceo);
-ok(merged.projects[3].name==='Rajasthan Phase I' && merged.deals[0].capTalks===250, 'CEO can change anything');
+ok(merged.projects[3].name==='Rajasthan Phase I' && merged.deals[0].capTalks===250, 'an admin can change anything');
+
+// numbering repair
+const renum = require('../lib/renumber');
+const doc = clone(state);
+doc.projects[0].packages[0].code='C1';
+doc.projects[0].packages[0].children[0].code='i';
+ok(renum.needsRenumber(doc), 'old codes are detected');
+renum.renumberAll(doc);
+ok(!renum.needsRenumber(doc), 'old codes are repaired');
+ok(doc.projects[0].packages[0].code==='A', 'packages become letters');
+ok(doc.projects[0].packages[1].children[0].children[0].code==='1.1', 'subtasks become decimals');
+ok(!JSON.stringify(doc.standardTemplate).match(/"code":"[a-z]+"/), 'the standard template is clean too');
 
 console.log('\n'+pass+' passed, '+fail+' failed');
 process.exit(fail?1:0);

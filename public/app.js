@@ -189,15 +189,8 @@ function renumberProject(p) {
   return map;
 }
 function renumberAll() { S.projects.forEach(renumberProject); }
-function canEdit(p, node) {
-  if (isCEO()) return true;
-  if (!p) return false;
-  if (p.head === S.viewer) return true;
-  if (!node) return false;
-  const m = indexProject(p); let c = m[node.id];
-  while (c) { if (c.n.owner === S.viewer) return true; c = c.parent ? m[c.parent.id] : null; }
-  return false;
-}
+/* whoever owns the project may change anything inside it */
+function canEdit(p) { return isCEO() || (!!p && p.head === S.viewer); }
 function statusOf(n) {
   if (n.closed) return 'Closed';
   if (n.log && n.log.length) return n.log[0].status;
@@ -310,13 +303,15 @@ function dueItems(ownerId) {
     if (t.done && !t.doneOn) return;
     out.push({ kind: 'task', t, d: t.due || '', done: !!t.done, doneOn: t.doneOn });
   });
-  S.projects.forEach(p => walkLeaves(p, n => {
-    const d = due(n); if (!d) return;
-    if (ownerId && n.owner !== ownerId) return;
-    const shut = n.closed || progOf(n) >= 1;
-    if (shut && !n.closedOn) return;
-    out.push({ kind: 'wbs', p, n, d, done: shut, doneOn: n.closedOn });
-  }));
+  S.projects.forEach(p => {
+    if (ownerId && p.head !== ownerId) return;   /* activities belong to whoever owns the project */
+    walkLeaves(p, n => {
+      const d = due(n); if (!d) return;
+      const shut = n.closed || progOf(n) >= 1;
+      if (shut && !n.closedOn) return;
+      out.push({ kind: 'wbs', p, n, d, done: shut, doneOn: n.closedOn });
+    });
+  });
   return out.sort((a, b) => (a.d || '9999').localeCompare(b.d || '9999'));
 }
 /* A completed item is not removed straight away — it stays struck through for the
@@ -357,18 +352,70 @@ function mailBtn(ownerId, subject, body) {
   b.onclick = e => { e.stopPropagation(); notify(ownerId, subject, body); };
   return b;
 }
+/* Three ways a message can reach somebody, set once under Settings:
+
+   'self'   — open a draft in your own mail app. It then genuinely comes from
+              your mailbox, which is the only route a corporate filter such as
+              @indianoil.in will always accept. Nothing to configure.
+   'server' — the server sends it, if a provider is set up.
+   'auto'   — try the server, and fall back to a draft if it will not go.        */
+function mailMode() { return S.mailSend || 'auto'; }
+
 function notify(ownerId, subject, body) {
   const p = person(ownerId);
   if (!p) { toast('Assign an owner first'); return; }
+  if (!p.email) { toast('No email address for ' + p.name + ' — add one under Organisation'); return; }
+
+  if (mailMode() === 'self') {
+    api('POST', '/api/notify', { personId: ownerId, subject, body, compose: true })
+      .then(openDraft).catch(e => toast('Could not prepare it: ' + e.message));
+    return;
+  }
   api('POST', '/api/notify', { personId: ownerId, subject, body })
     .then(r => {
       if (r.sent) { toast('Emailed ' + p.name + (r.invite ? ' — with their sign-in code' : '')); return; }
-      if (r.reason === 'no address on file') { toast('No email address for ' + p.name + ' — add one under Organisation'); return; }
-      /* it did not go out: hand over whatever the person needs so nobody is stuck */
+      if (mailMode() === 'auto') {
+        /* the server could not send it — prepare a draft instead so it still goes */
+        api('POST', '/api/notify', { personId: ownerId, subject, body, compose: true })
+          .then(openDraft).catch(() => mailFailed(p, r));
+        return;
+      }
       mailFailed(p, r);
     })
     .catch(e => toast('Could not send: ' + e.message));
 }
+
+/* Opens Outlook, or whatever handles mail on this machine, with everything
+   already written. One click to send. */
+function openDraft(r) {
+  const link = 'mailto:' + encodeURIComponent(r.to) +
+    '?subject=' + encodeURIComponent(r.subject) +
+    '&body=' + encodeURIComponent(r.text);
+  if (link.length > 1900) { showDraft(r, 'That message is long, so your mail app may cut it short. Copy it instead.'); return; }
+  window.location.href = link;
+  toast('Opening a draft in your mail app');
+  setTimeout(() => showDraft(r, null, true), 1200);
+}
+
+function showDraft(r, warning, quiet) {
+  const d = openDrawerEl(dHead('Email', 'Message for ' + esc(r.to)) + '<div class="dbody" id="db"></div>');
+  wireClose(d);
+  const b = document.getElementById('db');
+  b.innerHTML = `<p class="sub" style="margin-top:0">${quiet
+    ? 'A draft should have opened in your mail app. If it did not, copy it from here.'
+    : esc(warning || 'Copy this and send it however suits — Outlook, Teams, WhatsApp.')}</p>
+    ${r.invite ? `<div class="dsec"><h4>Their sign-in code</h4><div class="invitecode">${esc(r.invite)}</div></div>` : ''}
+    <div class="draftbox"><b>${esc(r.subject)}</b><pre>${esc(r.text)}</pre></div>`;
+  const row = el('div', 'row');
+  const c1 = el('button', 'btn pri', 'Copy the message');
+  c1.onclick = () => navigator.clipboard.writeText(r.subject + '\n\n' + r.text)
+    .then(() => toast('Copied'), () => toast('Could not copy'));
+  const c2 = el('button', 'btn', 'Copy their address');
+  c2.onclick = () => navigator.clipboard.writeText(r.to).then(() => toast('Copied'), () => toast('Could not copy'));
+  row.append(c1, c2);
+  b.appendChild(row);
+}
+
 function mailFailed(p, r) {
   const d = openDrawerEl(dHead('Email', 'Could not reach ' + p.name) + '<div class="dbody" id="db"></div>');
   wireClose(d);
@@ -390,7 +437,7 @@ function mailFailed(p, r) {
     b.appendChild(copy);
   }
   b.insertAdjacentHTML('beforeend',
-    '<div class="dsec"><h4>Fixing it</h4><div class="sub">Settings → Email has a test button and shows which service is in use.</div></div>');
+    '<div class="dsec"><h4>Fixing it</h4><div class="sub">Settings → Email lets you switch to sending from your own mailbox instead, which corporate filters always accept.</div></div>');
 }
 
 function assignedMail(ownerId, what, whenBy, context) {
@@ -472,18 +519,17 @@ function taskTable(items, opts) {
       meta.appendChild(open);
       tc.appendChild(meta);
       tr.appendChild(tc);
-      tr.appendChild(el('td')).appendChild(selOwner(i.n.owner, v => {
-        i.n.owner = v || undefined; save();
-        if (v && S.notifyOnAssign) { const m = assignedMail(v, i.n.name, due(i.n), i.p.name); notify(v, m.s, m.b); }
-        render();
-      }, !can));
+      const oc = el('td', 'sub');
+      oc.textContent = pname(i.p.head) || '—';
+      oc.title = 'Whoever owns the project is answerable for everything in it';
+      tr.appendChild(oc);
       const pc = el('td'); pc.appendChild(el('span', 'tag idle', esc(i.p.name))); tr.appendChild(pc);
       const dc = el('td'); dc.appendChild(dateIn(i.n.due || (i.n.f ? i.n.f + '-28' : ''), v => { i.n.due = v; save(); render(); }, !can));
       if (i.d && i.d < today()) dc.appendChild(el('span', 'sub late', ' ' + (-daysTo(i.d)) + 'd late'));
       tr.appendChild(dc);
       tr.appendChild(el('td')).appendChild(selUrg(i.n.urg || 'Medium', v => { i.n.urg = v; save(); render(); }, !can));
       const ac = el('td', 'r');
-      if (i.n.owner) ac.appendChild(mailBtn(i.n.owner, ...(() => { const m = assignedMail(i.n.owner, i.n.name, due(i.n), i.p.name); return [m.s, m.b]; })()));
+      if (i.p.head) ac.appendChild(mailBtn(i.p.head, ...(() => { const m = assignedMail(i.p.head, i.n.name, due(i.n), i.p.name); return [m.s, m.b]; })()));
       if (can) {
         const clear = el('button', 'btn ghost sm', '⌫');
         clear.title = 'Take it off the tracker by clearing its target date. The activity stays in the project.';
@@ -608,42 +654,21 @@ function rankAsk(a) { const u = a.urgency === 'High' ? 3 : a.urgency === 'Medium
    CEO: everything. Project lead: everything inside their own projects.
    Anyone else: only the branches assigned to them, plus the parent lines
    needed to place those branches — nothing else is rendered at all. */
+/* One project, one owner. They run all of it; nobody else is sent it at all. */
 function canSeeAll(p) { return isCEO() || (!!p && p.head === S.viewer); }
+function ownsProject(p) { return isCEO() || (!!p && p.head === S.viewer); }
 function visibleProjects() {
   if (isCEO()) return S.projects.slice();
-  return S.projects.filter(p => {
-    if (p.head === S.viewer) return true;
-    if (S.tasks.some(t => !t.done && t.owner === S.viewer && t.projectId === p.id)) return true;
-    let hit = false; walkAll(p, n => { if (n.owner === S.viewer) hit = true; });
-    return hit;
-  });
+  return S.projects.filter(p => p.head === S.viewer);
 }
 function canSeeProject(p) { return canSeeAll(p) || visibleProjects().some(x => x.id === p.id); }
-/* null means no restriction; otherwise own = fully visible, ctx = shown as a heading only */
-function scopeOf(p) {
-  if (canSeeAll(p)) return null;
-  const map = indexProject(p), own = new Set(), ctx = new Set();
-  walkAll(p, n => {
-    if (n.owner !== S.viewer) return;
-    own.add(n.id);
-    (function rec(x) { (x.children || []).forEach(c => { own.add(c.id); rec(c); }); })(n);
-    let cur = map[n.id];
-    while (cur && cur.parent) { ctx.add(cur.parent.id); cur = map[cur.parent.id]; }
-  });
-  return { own, ctx };
-}
-function inScope(sc, n) { return !sc || sc.own.has(n.id) || sc.ctx.has(n.id); }
-function isCtx(sc, n) { return !!sc && !sc.own.has(n.id) && sc.ctx.has(n.id); }
-function myItems(p) { const out = []; walkLeaves(p, n => { if (n.owner === S.viewer) out.push(n); }); return out; }
+/* the server sends a project whole or not at all, so nothing to narrow here */
+function scopeOf() { return null; }
+function inScope() { return true; }
+function isCtx() { return false; }
+function myItems(p) { const out = []; walkLeaves(p, n => out.push(n)); return out; }
 
-function myProjects(id) {
-  return S.projects.filter(p => {
-    if (p.head === id) return true;
-    let hit = false; walkAll(p, n => { if (n.owner === id) hit = true; });
-    if (hit) return true;
-    return S.tasks.some(t => !t.done && t.owner === id && t.projectId === p.id);
-  });
-}
+function myProjects(id) { return S.projects.filter(p => p.head === id); }
 function viewMyDesk() {
   const me = S.viewer, who = person(me) || {};
   $('#crumb').textContent = 'My desk'; $('#title').textContent = who.name || 'My work';
@@ -670,7 +695,7 @@ function viewMyDesk() {
   v.appendChild(section('My projects', 'Only projects where you lead or own something.',
     mps.length ? tableOf(['Project', 'Capacity', 'Progress', 'My open items', 'My past due', 'COD'],
       mps.map(p => {
-        const myOpen = []; walkLeaves(p, n => { if (n.owner === me && !n.closed && progOf(n) < 1) myOpen.push(n); });
+        const myOpen = []; walkLeaves(p, n => { if (!n.closed && progOf(n) < 1) myOpen.push(n); });
         return [{ link: [p.name, () => go('project', p.id)], html: `<div class="sub">${esc([p.site, p.state].filter(Boolean).join(', '))}</div>` },
         `<span class="num">${((+p.solar || 0) + (+p.wind || 0))} MW</span>`,
         `<div class="bar" style="min-width:100px"><i style="width:${Math.min(100, projProg(p) * 100)}%"></i></div><div class="num" style="font-size:11px">${pct(projProg(p))}</div>`,
@@ -728,6 +753,7 @@ function viewProjects() {
   ta.appendChild(lens('projects'));
   if (isCEO()) {
     const w = el('button', 'btn', 'Choose status columns'); w.onclick = pickWatch; ta.appendChild(w);
+    const many = el('button', 'btn', 'Add several'); many.onclick = addManyProjects; ta.appendChild(many);
     const b = el('button', 'btn pri', '+ Add project');
     b.onclick = () => { const p = newProject({ name: 'New project' }); S.projects.push(p); save(); go('project', p.id); };
     ta.appendChild(b);
@@ -840,6 +866,104 @@ function viewProjects() {
   v.appendChild(section('Package heatmap', 'Where each project stands on each package — ' + codes.map(k => k.code).join(', ') + '. Click a cell to jump straight to it.', hm));
 }
 
+/* Adding a portfolio one project at a time is miserable, so take a whole list
+   at once — pasted out of a table, or typed. One project per line:
+   Name | State | Solar MWp | Wind MW | BESS MWh */
+function addManyProjects() {
+  const d = openDrawerEl(dHead('Projects', 'Add several at once') + '<div class="dbody" id="db"></div>');
+  wireClose(d);
+  const b = document.getElementById('db');
+  b.innerHTML = `<p class="sub" style="margin-top:0">One project per line. Separate the columns with a vertical bar, a tab or a comma:</p>
+    <div class="fmtline">Name │ State │ Solar MWp │ Wind MW │ BESS MWh</div>
+    <p class="sub">The last three are numbers and may be left out. Copy straight from a spreadsheet if that is easier — tabs work.</p>`;
+
+  const ta = el('textarea'); ta.rows = 12; ta.className = 'bulk';
+  ta.placeholder = 'Ananthapuram III – ISTS | Andhra Pradesh | 465 | 0\nKhavda VII – ISTS | Gujarat | 387.5 | 100';
+  b.appendChild(ta);
+
+  const tplRow = el('label', 'fld'); tplRow.style.marginTop = '14px';
+  tplRow.innerHTML = '<span>Breakdown to start each one on</span>';
+  const tpl = el('select');
+  tpl.innerHTML = '<option value="__std">The standard breakdown</option><option value="">None — build it later</option>' +
+    (S.templates || []).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  tplRow.appendChild(tpl);
+  b.appendChild(tplRow);
+
+  const preview = el('div', 'sub'); preview.style.margin = '4px 0 12px';
+  b.appendChild(preview);
+
+  const parseLines = () => {
+    const out = [];
+    ta.value.split('\n').forEach(line => {
+      const raw = line.trim();
+      if (!raw) return;
+      const sep = raw.indexOf('|') >= 0 ? '|' : (raw.indexOf('\t') >= 0 ? '\t' : ',');
+      const c = raw.split(sep).map(x => x.trim());
+      if (!c[0]) return;
+      out.push({
+        name: c[0], state: c[1] || '',
+        solar: +(c[2] || 0) || 0, wind: +(c[3] || 0) || 0, bess: +(c[4] || 0) || 0,
+        dupe: S.projects.some(p => p.name.trim().toLowerCase() === c[0].toLowerCase())
+      });
+    });
+    return out;
+  };
+  const refresh = () => {
+    const rows = parseLines();
+    const dupes = rows.filter(r => r.dupe).length;
+    const mw = rows.filter(r => !r.dupe).reduce((a, r) => a + r.solar + r.wind, 0);
+    preview.innerHTML = rows.length
+      ? '<b>' + (rows.length - dupes) + '</b> to add' + (mw ? ', ' + mw.toFixed(1) + ' MW' : '') +
+        (dupes ? ' · <b>' + dupes + '</b> skipped, a project of that name already exists' : '')
+      : 'Nothing to add yet.';
+  };
+  ta.oninput = refresh; refresh();
+
+  const row = el('div', 'row');
+  const fill = el('button', 'btn sm', 'Fill in the substation list');
+  fill.title = 'The projects from the substation and PPA tables';
+  fill.onclick = () => { ta.value = SUBSTATION_LIST; refresh(); };
+  const go = el('button', 'btn pri', 'Add them');
+  go.onclick = () => {
+    const rows = parseLines().filter(r => !r.dupe);
+    if (!rows.length) { toast('Nothing new to add'); return; }
+    let packages = [];
+    if (tpl.value === '__std') packages = S.standardTemplate || [];
+    else if (tpl.value) { const t = (S.templates || []).find(x => x.id === tpl.value); packages = t ? t.packages : []; }
+    rows.forEach(r => {
+      const p = newProject({
+        name: r.name, state: r.state, solar: r.solar, wind: r.wind, bess: r.bess,
+        site: r.name.split(/[,–-]/)[0].trim(), setup: false
+      });
+      p.packages = packages.length ? packagesFromTemplate(packages) : [];
+      renumberProject(p);
+      S.projects.push(p);
+    });
+    save(); closeDrawer(); render();
+    toast(rows.length + ' projects added');
+  };
+  row.append(fill, go);
+  b.appendChild(row);
+}
+
+const SUBSTATION_LIST = [
+  'Sisrana | Gujarat | 155 | 0',
+  'Davanagere | Karnataka | 0 | 300',
+  'Saurashtra | Gujarat | 0 | 100',
+  'Ananthapuram III – ISTS | Andhra Pradesh | 465 | 0',
+  'Krishnagiri PS (Kurnool V) – ISTS | Andhra Pradesh | 542.5 | 0',
+  'Bhachau/Lakhadia II – ISTS | Gujarat | 0 | 249.1',
+  'Pali – ISTS | Rajasthan | 240.3 | 0',
+  'Khavda VII – ISTS | Gujarat | 387.5 | 100',
+  'Solapur – ISTS | Maharashtra | 465 | 0',
+  'Ananthapuram III (Ph-2) – ISTS | Andhra Pradesh | 930 | 0',
+  'Bhalgamda, Morbi – InSTS | Gujarat | 465 | 0',
+  'Sahjahanpur, Jalaun – InSTS | Uttar Pradesh | 125.6 | 0',
+  'Purakalan, Lalitpur – InSTS | Uttar Pradesh | 37.2 | 0',
+  'Jamgaon – InSTS | Maharashtra | 77.5 | 50',
+  'Karur – InSTS | Tamil Nadu | 77.5 | 50'
+].join('\n');
+
 function scopedProjectTable(list) {
   const wrap = el('div');
   const t = el('table', 'tbl ptbl');
@@ -912,7 +1036,7 @@ function pickWatch() {
 }
 
 /* ---------- project detail ---------- */
-let FILTER = { q: '', owner: '', only: '' }, COLLAPSED = {};
+let FILTER = { q: '', only: '' }, COLLAPSED = {};
 function viewProject() {
   const p = proj(PID); if (!p) return go('projects');
   if (!canSeeProject(p)) { toast('That project is not assigned to you'); return go('projects'); }
@@ -925,37 +1049,6 @@ function viewProject() {
   const v = $('#view'); v.innerHTML = '';
   v.appendChild(ownerStrip(p, full));
   const pr = projProg(p), pl = plannedNow(p), h = health(p);
-
-  if (!full) {
-    const mine = myItems(p), open = mine.filter(n => !n.closed && progOf(n) < 1), late = mine.filter(isLate);
-    const myProg = mine.length ? mine.reduce((a, n) => a + progOf(n), 0) / mine.length : 0;
-    const mm = el('div', 'metrics'); mm.style.marginBottom = '26px';
-    mm.innerHTML = `
-      <div class="metric"><div class="eyebrow">Capacity</div><div class="v">${((+p.solar || 0) + (+p.wind || 0)).toLocaleString()}<small>MW</small></div>
-        <div class="l">${esc([p.site, p.state].filter(Boolean).join(', ') || '—')} · COD ${p.cod ? mLabel(p.cod) : '—'}</div></div>
-      <div class="metric"><div class="eyebrow">Your progress</div><div class="v">${pct(myProg)}</div>
-        <div class="l">Across ${mine.length} items assigned to you</div>
-        <div class="bar" style="margin-top:8px"><i style="width:${Math.min(100, myProg * 100)}%"></i></div></div>
-      <div class="metric"><div class="eyebrow">Open</div><div class="v">${open.length}</div><div class="l">Yours, not yet finished</div></div>
-      <div class="metric"><div class="eyebrow">Past due</div><div class="v">${late.length}</div><div class="l">Yours, target date gone</div></div>`;
-    v.appendChild(mm);
-    v.appendChild(el('div', 'scopenote', 'You are seeing only the work assigned to you in this project. Whole-project progress, the S-curve and other people’s activities are not shown. ' + esc(pname(p.head) || 'The project lead') + ' has the full picture.'));
-    v.appendChild(myChangeSection(p, sc));
-    const wb2 = el('section', 'sect');
-    wb2.innerHTML = `<header><h2>Your work</h2><div class="sub">Your activities, shown under the packages they belong to.</div></header>`;
-    const tb2 = el('div', 'toolbar');
-    const q2 = el('input'); q2.type = 'text'; q2.placeholder = 'Search your activities'; q2.value = FILTER.q;
-    const only2 = el('select');
-    only2.innerHTML = '<option value="">All of mine</option><option value="late">Past due</option><option value="open">Open</option><option value="closed">Closed</option>';
-    only2.value = FILTER.only;
-    const host2 = el('div');
-    q2.oninput = () => { FILTER.q = q2.value; renderTree(p, host2); };
-    only2.onchange = () => { FILTER.only = only2.value; renderTree(p, host2); };
-    tb2.append(q2, only2);
-    wb2.append(tb2, host2); renderTree(p, host2);
-    v.appendChild(wb2);
-    return;
-  }
 
   const m = el('div', 'metrics'); m.style.marginBottom = '26px';
   m.innerHTML = `
@@ -1000,15 +1093,13 @@ function viewProject() {
   wb.innerHTML = `<header><h2>Work breakdown</h2><div class="sub">Packages, tasks and subtasks. Click any line to open it.</div></header>`;
   const tb = el('div', 'toolbar');
   const q = el('input'); q.type = 'text'; q.placeholder = 'Search activities'; q.value = FILTER.q;
-  const own = el('select'); own.innerHTML = '<option value="">Any owner</option><option value="__none">Unassigned</option>' + S.org.map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join(''); own.value = FILTER.owner;
-  const only = el('select'); only.innerHTML = '<option value="">All activities</option><option value="late">Past due</option><option value="open">Open</option><option value="mine">Mine</option><option value="chg">Has a change</option><option value="closed">Closed</option>'; only.value = FILTER.only;
+  const only = el('select'); only.innerHTML = '<option value="">All activities</option><option value="late">Past due</option><option value="open">Open</option><option value="chg">Has a change</option><option value="closed">Closed</option>'; only.value = FILTER.only;
   const host = el('div');
   q.oninput = () => { FILTER.q = q.value; renderTree(p, host); };
-  own.onchange = () => { FILTER.owner = own.value; renderTree(p, host); };
   only.onchange = () => { FILTER.only = only.value; renderTree(p, host); };
   const ex = el('button', 'btn sm', 'Expand all'); ex.onclick = () => { walkAll(p, n => COLLAPSED[n.id] = false); renderTree(p, host); };
   const co = el('button', 'btn sm', 'Collapse all'); co.onclick = () => { walkAll(p, n => COLLAPSED[n.id] = true); renderTree(p, host); };
-  tb.append(q, own, only, ex, co);
+  tb.append(q, only, ex, co);
   if (canAddPackage(p)) {
     const ed = el('button', 'btn sm' + (EDITING ? ' pri' : ''), EDITING ? 'Done editing' : 'Edit structure');
     ed.onclick = () => { EDITING = !EDITING; render(); };
@@ -1058,12 +1149,10 @@ function ownerStrip(p, full) {
   box.appendChild(left);
 
   if (lead) {
-    let mine = 0, late = 0;
-    walkLeaves(p, n => { if (n.owner === lead.id) { mine++; if (isLate(n)) late++; } });
     const mid = el('div', 'os-mid');
-    mid.innerHTML = `<div><b class="num">${countOpen(p)}</b><span>Open in project</span></div>
+    mid.innerHTML = `<div><b class="num">${countOpen(p)}</b><span>Open</span></div>
       <div><b class="num ${countLate(p) ? 'late' : ''}">${countLate(p)}</b><span>Past due</span></div>
-      <div><b class="num">${mine}</b><span>Owned directly</span></div>`;
+      <div><b class="num">${pct0(projProg(p))}</b><span>Complete</span></div>`;
     box.appendChild(mid);
   }
 
@@ -1075,14 +1164,9 @@ function ownerStrip(p, full) {
       ' with ' + countLate(p) + ' activities past due.');
     right.appendChild(m);
   }
-  if (full) {
-    const b = el('button', 'btn sm', 'People on this project');
-    b.onclick = () => {
-      const map = {};
-      walkLeaves(p, n => { if (n.owner) map[n.owner] = (map[n.owner] || 0) + 1; });
-      const names = Object.keys(map).map(id => pname(id) + ' (' + map[id] + ')');
-      toast(names.length ? names.join(' · ') : 'Nobody owns an activity yet');
-    };
+  if (canSet) {
+    const b = el('button', 'btn sm', 'Edit project details');
+    b.onclick = () => editProject(p);
     right.appendChild(b);
   }
   box.appendChild(right);
@@ -1112,8 +1196,8 @@ function sCurve(p) {
 let EDITING = false;
 if (UI.showChanges === undefined) UI.showChanges = true;
 
-function canStructure(p, node) { return canEdit(p, node); }
-function canAddPackage(p) { return isCEO() || p.head === S.viewer; }
+function canStructure(p) { return ownsProject(p); }
+function canAddPackage(p) { return ownsProject(p); }
 
 function listFor(p, node) {           /* the array a node lives in */
   if (!node) return p.packages;
@@ -1211,6 +1295,35 @@ function packagesFromTemplate(list) {
     return o;
   });
 }
+/* Bring a template into a project without losing anything already recorded.
+   Items are matched by name within their parent, so an existing line keeps its
+   progress, its dates and its whole status history; only genuinely new lines
+   are added, and nothing is ever removed. */
+function mergeTemplate(project, tplPackages) {
+  const stats = { added: 0, kept: 0 };
+  (function walk(target, source) {
+    (source || []).forEach(src => {
+      const key = String(src.name || '').trim().toLowerCase();
+      const found = (target || []).find(t => String(t.name || '').trim().toLowerCase() === key);
+      if (found) {
+        stats.kept++;
+        if (found.w == null && src.w != null) found.w = src.w;
+        if (found.pw == null && src.pw != null) found.pw = src.pw;
+        if (!found.desc && src.desc) found.desc = src.desc;
+        if (found.qty == null && src.qty != null) found.qty = src.qty;
+        found.children = found.children || [];
+        walk(found.children, src.children);
+      } else {
+        const fresh = packagesFromTemplate([src])[0];
+        target.push(fresh);
+        stats.added += 1 + countIn(fresh.children);
+      }
+    });
+  })(project.packages, tplPackages);
+  return stats;
+}
+function countIn(list) { return (list || []).reduce((a, n) => a + 1 + countIn(n.children), 0); }
+
 function builtinTemplates() {
   return [{
     id: '__standard', builtin: true,
@@ -1298,12 +1411,9 @@ function openTemplates(p) {
 function matches(p, n) {
   const q = FILTER.q.trim().toLowerCase();
   if (q && !(n.name || '').toLowerCase().includes(q)) return false;
-  if (FILTER.owner === '__none' && n.owner) return false;
-  if (FILTER.owner && FILTER.owner !== '__none' && n.owner !== FILTER.owner) return false;
   if (FILTER.only === 'late' && !isLate(n)) return false;
   if (FILTER.only === 'open' && (n.closed || progOf(n) >= 1)) return false;
   if (FILTER.only === 'closed' && !n.closed) return false;
-  if (FILTER.only === 'mine' && n.owner !== S.viewer) return false;
   if (FILTER.only === 'chg' && !chgFor(p, codePath(p, n.id)).length) return false;
   return true;
 }
@@ -1330,7 +1440,7 @@ function renderTree(p, host) {
     return;
   }
   const hd = el('div', 'thead');
-  hd.innerHTML = `<div>Activity</div><div class="r">Weight</div><div>Status</div><div class="r">Done</div><div>Owner</div><div>Target</div><div class="r">${EDITING ? 'Edit' : ''}</div>`;
+  hd.innerHTML = `<div>Activity</div><div class="r">Weight</div><div>Status</div><div class="r">Done</div><div>Target</div><div class="r">${EDITING ? 'Edit' : ''}</div>`;
   host.appendChild(hd);
   let shown = 0;
   p.packages.forEach(pk => (function rec(n, depth) {
@@ -1354,7 +1464,7 @@ function rowFor(p, n, depth, filtering, host, ctxOnly) {
     const nm = el('div', 'tname'); nm.style.paddingLeft = (depth * 15) + 'px';
     nm.append(el('span', 'tw'), el('span', 'tcode', esc(n.code || '')), el('span', 'tlabel', esc(n.name)));
     r.appendChild(nm);
-    for (let i = 0; i < 5; i++) r.appendChild(el('div', ''));
+    for (let i = 0; i < 4; i++) r.appendChild(el('div', ''));
     r.appendChild(el('div', 'r sub', ''));
     return r;
   }
@@ -1398,7 +1508,6 @@ function rowFor(p, n, depth, filtering, host, ctxOnly) {
 
   r.appendChild(el('div', '', `<span class="tag ${tagClass(st, late)}">${esc(st)}</span>`));
   r.appendChild(el('div', 'num r', pct0(pr)));
-  r.appendChild(el('div', 'sub ownercell', esc(n.owner ? pname(n.owner) : '—')));
   r.appendChild(el('div', 'num duecell ' + (late ? 'late' : ''), d ? dLabel(d) : '—'));
 
   const act = el('div', 'r acts');
@@ -1430,9 +1539,8 @@ function rowFor(p, n, depth, filtering, host, ctxOnly) {
 
 /* ---------- task drawer ---------- */
 function openTask(p, n) {
-  const sc = scopeOf(p);
-  if (sc && !sc.own.has(n.id)) { toast('That activity is not assigned to you'); return; }
-  const editable = canEdit(p, n), kids = !!(n.children && n.children.length);
+  if (!canSeeProject(p)) { toast('That project is not yours'); return; }
+  const editable = canEdit(p), kids = !!(n.children && n.children.length);
   const map = indexProject(p), chain = []; let cur = map[n.id];
   while (cur) { chain.unshift(cur.n.name); cur = cur.parent ? map[cur.parent.id] : null; }
   const path = codePath(p, n.id);
@@ -1464,17 +1572,11 @@ function openTask(p, n) {
   }
 
   const a = el('div', 'dsec');
-  a.innerHTML = `<h4>Assignment and schedule</h4><div class="grid2">
-    <label class="fld"><span>Owner</span><select id="fOwner" ${editable ? '' : 'disabled'}><option value="">Unassigned</option>
-      ${S.org.map(o => `<option value="${o.id}" ${n.owner === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
-    <label class="fld"><span>Target date</span><input type="date" id="fDue" value="${esc(n.due || '')}" ${editable ? '' : 'disabled'}></label></div>
-    ${n.s || n.f ? `<div class="sub">Baseline schedule ${mLabel(n.s)} → ${mLabel(n.f)}</div>` : ''}`;
+  a.innerHTML = `<h4>Schedule</h4>
+    <label class="fld"><span>Target date</span><input type="date" id="fDue" value="${esc(n.due || '')}" ${editable ? '' : 'disabled'}></label>
+    ${n.s || n.f ? `<div class="sub">Baseline schedule ${mLabel(n.s)} → ${mLabel(n.f)}</div>` : ''}
+    <div class="sub" style="margin-top:6px">Answerable for this: <b>${esc(pname(p.head) || 'nobody yet')}</b>, who owns ${esc(p.name)}.</div>`;
   b.appendChild(a);
-  $('#fOwner', d).onchange = e => {
-    n.owner = e.target.value || undefined; save();
-    if (n.owner && S.notifyOnAssign) { const mm = assignedMail(n.owner, n.name, due(n), p.name); notify(n.owner, mm.s, mm.b); }
-    render(); openTask(p, n);
-  };
   $('#fDue', d).onchange = e => { n.due = e.target.value || undefined; save(); render(); openTask(p, n); };
 
   if (!kids) {
@@ -1697,9 +1799,8 @@ function viewActivities() {
   });
   v.appendChild(bar);
 
-  const rows = visibleProjects().map(p => ({ p, n: findByPath(p, path), sc: scopeOf(p) }))
-    .filter(r => r.n && (!r.sc || r.sc.own.has(r.n.id)));
-  if (!isCEO()) v.appendChild(el('div', 'scopenote', 'Only activities assigned to you, in the projects you are part of.'));
+  const rows = visibleProjects().map(p => ({ p, n: findByPath(p, path) })).filter(r => r.n);
+  if (!isCEO()) v.appendChild(el('div', 'scopenote', 'The projects you own.'));
   if (!rows.length) { v.appendChild(el('div', 'empty', 'No project has this activity.')); return; }
   const avg = rows.reduce((a, r) => a + progOf(r.n), 0) / rows.length;
   const done = rows.filter(r => r.n.closed || progOf(r.n) >= 1).length, late = rows.filter(r => isLate(r.n)).length, ns = rows.filter(r => progOf(r.n) === 0 && !r.n.closed).length;
@@ -1711,14 +1812,14 @@ function viewActivities() {
   v.appendChild(m);
 
   v.appendChild(section(labelForPath(path), 'Sorted by progress. Open a row to see that project’s ledger and changes.',
-    tableOf(['Project', 'Status', 'Progress', 'Owner', 'Target', 'Last update', 'Changes'],
+    tableOf(['Project', 'Owner', 'Status', 'Progress', 'Target', 'Last update', 'Changes'],
       rows.sort((a, b) => progOf(b.n) - progOf(a.n)).map(r => {
         const last = (r.n.log || [])[0], pr = progOf(r.n);
         return [
           { link: [r.p.name, () => { PID = r.p.id; VIEW = 'project'; render(); openTask(r.p, r.n); }], html: `<div class="sub">${esc([r.p.site, r.p.state].filter(Boolean).join(', '))}</div>` },
+          `<span class="sub">${esc(pname(r.p.head))}</span>`,
           `<span class="tag ${tagClass(statusOf(r.n), isLate(r.n))}">${esc(statusOf(r.n))}</span>`,
           `<div class="bar" style="min-width:110px"><i style="width:${Math.min(100, pr * 100)}%"></i></div><div class="num" style="font-size:11px;margin-top:3px">${pct0(pr)}</div>`,
-          `<span class="sub">${esc(pname(r.n.owner))}</span>`,
           `<span class="num ${isLate(r.n) ? 'late' : ''}">${due(r.n) ? dLabel(due(r.n)) : '—'}</span>`,
           `<span class="sub">${last ? esc(last.status) + ' · ' + dLabel(last.date) : '—'}</span>`,
           `<span class="num">${chgFor(r.p, path).length || '—'}</span>`
@@ -2051,7 +2152,7 @@ function viewOrg() {
     x.onclick = () => {
       if (!confirm('Remove ' + o.name + '? Their assignments become unassigned.')) return;
       S.org = S.org.filter(q => q.id !== o.id);
-      S.projects.forEach(p => { walkAll(p, nd => { if (nd.owner === o.id) nd.owner = undefined; }); if (p.head === o.id) p.head = ''; });
+      S.projects.forEach(p => { if (p.head === o.id) p.head = ''; });
       S.tasks.forEach(z => { if (z.owner === o.id) z.owner = ''; });
       save(); render();
     };
@@ -2140,7 +2241,7 @@ function showInvite(person, out) {
 
 function countAssigned(id) {
   let n = S.tasks.filter(t => !t.done && t.owner === id).length;
-  S.projects.forEach(p => { if (p.head === id) n++; walkAll(p, x => { if (x.owner === id) n++; }); });
+  S.projects.forEach(p => { if (p.head === id) n++; });
   return n;
 }
 function mergeOrg(rows) {
@@ -2243,7 +2344,14 @@ function viewPeople() {
   const v = $('#view'); v.innerHTML = '';
 
   const rows = {};
-  S.projects.forEach(p => walkLeaves(p, n => { if (n.owner) (rows[n.owner] = rows[n.owner] || []).push({ what: n.name, project: p.name, d: due(n), st: statusOf(n), late: isLate(n), open: () => { PID = p.id; VIEW = 'project'; render(); openTask(p, n); } }); }));
+  S.projects.forEach(p => {
+    if (!p.head) return;
+    (rows[p.head] = rows[p.head] || []).push({
+      what: p.name + ' — whole project', project: p.name, d: p.cod ? p.cod + '-28' : '',
+      st: p.setup ? 'Not set up' : health(p).label, late: countLate(p) > 0,
+      open: () => go('project', p.id)
+    });
+  });
   S.tasks.forEach(t => { if (t.owner && !t.done) (rows[t.owner] = rows[t.owner] || []).push({ what: t.title, project: (proj(t.projectId) || {}).name || '—', d: t.due, st: 'Task', late: t.due && t.due < today(), open: null }); });
 
   const t = el('table', 'tbl peopletbl');
@@ -2363,6 +2471,20 @@ function viewSettings() {
     const em = el('section', 'sect');
     em.innerHTML = `<header><h2>Email</h2><div class="sub">Used for sign-in codes, invite codes and assignment notices.</div></header>
       <div id="mailStatus" class="sub">Checking…</div>`;
+    const modeWrap = el('div'); modeWrap.style.margin = '14px 0 4px';
+    modeWrap.innerHTML = '<div class="eyebrow" style="margin-bottom:6px">How messages go out</div>';
+    [['self', 'From my own mailbox', 'Opens a draft in Outlook with everything written. It arrives from your real address, so a corporate filter such as @indianoil.in accepts it. Nothing to set up.'],
+     ['auto', 'Server first, my mailbox if it fails', 'Tries to send automatically and falls back to a draft.'],
+     ['server', 'Server only', 'Fully automatic. Needs a mail provider, and messages come from the address you verified.']
+    ].forEach(([val, label, why]) => {
+      const r = el('label', 'pickrow');
+      r.innerHTML = `<input type="radio" name="mailmode" value="${val}" ${mailMode() === val ? 'checked' : ''} style="width:auto">
+        <span><b>${esc(label)}</b><div class="sub">${esc(why)}</div></span>`;
+      r.querySelector('input').onchange = () => { S.mailSend = val; save(); render(); };
+      modeWrap.appendChild(r);
+    });
+    em.appendChild(modeWrap);
+
     const row = el('div', 'row'); row.style.marginTop = '12px';
     const to = el('input'); to.type = 'text'; to.placeholder = 'Send a test to…'; to.style.maxWidth = '280px';
     to.value = (ME && ME.email) || '';
@@ -2385,8 +2507,8 @@ function viewSettings() {
       const n = document.getElementById('mailStatus');
       if (!n) return;
       n.innerHTML = h.mail
-        ? 'Sending through <b>' + esc(h.mailProvider) + '</b>, from <b>' + esc(h.mailFrom) + '</b>.'
-        : '<b>No mail service is set up.</b> Codes and invites are written to the Vercel log instead of being sent. Add BREVO_API_KEY in Vercel to turn it on.';
+        ? 'Server sending is on, through <b>' + esc(h.mailProvider) + '</b>, from <b>' + esc(h.mailFrom) + '</b>.'
+        : '<b>No mail provider is set up on the server.</b> With <i>From my own mailbox</i> chosen below, that does not matter — messages open as drafts in Outlook and go from your real address.';
     }).catch(() => { });
   }
 
@@ -2402,6 +2524,8 @@ function viewSettings() {
   v.appendChild(note);
 
   if (!adminBits) return;
+
+  v.appendChild(templatesSection());
 
   const st = el('section', 'sect');
   st.innerHTML = `<header><h2>Status options</h2><div class="sub">Offered when someone records an update. One per line.</div></header>`;
@@ -2443,6 +2567,101 @@ function viewSettings() {
     catch (e) { toast(e.message); }
   };
   row.append(ex, im, fi, rs); dt.appendChild(row); v.appendChild(dt);
+}
+
+/* ===================== TEMPLATES (Settings) ===================== */
+function templatesSection() {
+  const s = el('section', 'sect');
+  s.innerHTML = `<header><h2>Templates</h2><div class="sub">A reusable structure. Apply it to any project — existing lines keep their progress and history, only missing ones are added.</div></header>`;
+
+  const mk = el('div', 'row'); mk.style.marginBottom = '14px';
+  const name = el('input'); name.type = 'text'; name.placeholder = 'New template name, e.g. Wind + BESS hybrid'; name.style.flex = '1';
+  const from = el('select'); from.style.maxWidth = '230px';
+  from.innerHTML = '<option value="">Start blank</option><option value="__std">Copy the standard breakdown</option>' +
+    S.projects.map(p => `<option value="${p.id}">Copy from ${esc(p.name)}</option>`).join('');
+  const make = el('button', 'btn pri', 'Create');
+  make.onclick = () => {
+    const n = name.value.trim();
+    if (!n) { name.focus(); return; }
+    let packages = [];
+    if (from.value === '__std') packages = clone(S.standardTemplate || []);
+    else if (from.value) { const p = proj(from.value); if (p) packages = templateFromPackages(p.packages); }
+    S.templates = S.templates || [];
+    S.templates.unshift({ id: uid(), name: n, note: from.value ? 'Copied on ' + dLabel(today()) : 'Built by hand', packages });
+    save(); render(); toast('Template created');
+  };
+  mk.append(name, from, make);
+  s.appendChild(mk);
+
+  const list = S.templates || [];
+  if (!list.length) {
+    s.appendChild(el('div', 'empty', 'No templates yet. Build a project the way you want it, then copy it here — every later project can start from it.'));
+    return s;
+  }
+  s.appendChild(tableOf(['Template', 'Items', 'Where it came from', ''],
+    list.map(t => [
+      { link: [t.name, () => renameTemplate(t)] },
+      `<span class="num">${countIn(t.packages)}</span>`,
+      `<span class="sub">${esc(t.note || '')}</span>`,
+      {
+        html: '', act: [
+          ['Apply to projects', () => applyTemplate(t)],
+          ['Duplicate', () => { S.templates.unshift({ id: uid(), name: t.name + ' (copy)', note: t.note, packages: clone(t.packages) }); save(); render(); }],
+          ['Delete', () => { if (confirm('Delete the template “' + t.name + '”? Projects built from it are not affected.')) { S.templates = S.templates.filter(x => x.id !== t.id); save(); render(); } }]
+        ]
+      }
+    ])));
+  return s;
+}
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+function renameTemplate(t) {
+  const n = prompt('Rename template', t.name);
+  if (n && n.trim()) { t.name = n.trim(); save(); render(); }
+}
+
+function applyTemplate(t) {
+  const d = openDrawerEl(dHead('Templates', 'Apply “' + t.name + '”') + '<div class="dbody" id="db"></div>');
+  wireClose(d);
+  const b = document.getElementById('db');
+  b.innerHTML = `<p class="sub" style="margin-top:0">Choose the projects. ${countIn(t.packages)} items in this template.</p>`;
+  const picks = el('div');
+  S.projects.forEach(p => {
+    const r = el('label', 'pickrow');
+    r.innerHTML = `<input type="checkbox" value="${p.id}" style="width:auto">
+      <span style="flex:1">${esc(p.name)}</span>
+      <span class="sub">${countNodes(p)} items now</span>`;
+    picks.appendChild(r);
+  });
+  b.appendChild(picks);
+
+  const mode = el('div', 'dsec');
+  mode.innerHTML = `<h4>How to apply it</h4>
+    <label class="pickrow"><input type="radio" name="tmode" value="merge" checked style="width:auto">
+      <span><b>Add what is missing</b><div class="sub">Existing lines keep their progress, dates and status history. Nothing is deleted.</div></span></label>
+    <label class="pickrow"><input type="radio" name="tmode" value="replace" style="width:auto">
+      <span><b>Replace the breakdown</b><div class="sub">Throws away what is there, including progress. Take a backup first.</div></span></label>`;
+  b.appendChild(mode);
+
+  const go = el('button', 'btn pri', 'Apply');
+  go.onclick = () => {
+    const ids = Array.prototype.slice.call(picks.querySelectorAll('input:checked')).map(i => i.value);
+    if (!ids.length) { toast('Pick at least one project'); return; }
+    const how = (b.querySelector('input[name=tmode]:checked') || {}).value || 'merge';
+    if (how === 'replace' && !confirm('Replace the breakdown on ' + ids.length + ' project(s)? All progress on them is deleted.')) return;
+    let added = 0, kept = 0;
+    ids.forEach(id => {
+      const p = proj(id); if (!p) return;
+      if (how === 'replace') { p.packages = packagesFromTemplate(t.packages); p.snaps = []; }
+      else { const st = mergeTemplate(p, t.packages); added += st.added; kept += st.kept; }
+      p.templateId = t.id;
+      renumberProject(p);
+    });
+    save(); closeDrawer(); render();
+    toast(how === 'replace' ? 'Replaced on ' + ids.length + ' project(s)'
+      : added + ' new items added, ' + kept + ' left untouched');
+  };
+  b.appendChild(go);
 }
 
 /* ===================== boot ===================== */

@@ -133,13 +133,17 @@ prints sign-in codes to the terminal.
 
 # Who sees what
 
-| | CEO | Project lead | Everyone else |
-| --- | --- | --- | --- |
-| Portfolio, heatmap, every project | ● | — | — |
-| Their own project in full | ● | ● | — |
-| Their assigned activities | ● | ● | ● |
-| Offtake, enablers, directory | ● | — | — |
-| Colleagues' email addresses | ● | — | — |
+**One project, one owner.** A project belongs to exactly one person. They run
+all of it — every package, the schedule, the lot. Nobody else is sent it. There
+is no ownership below project level, so there is nothing to filter by.
+
+| | Full access | Project owner |
+| --- | --- | --- |
+| Portfolio, heatmap, every project | ● | — |
+| Their own project, whole | ● | ● |
+| Offtake, enablers, directory, templates | ● | — |
+| Colleagues' email addresses | ● | — |
+| Hand a project to somebody else | ● | — |
 
 This is enforced on the server, not in the browser. A member's page does not
 merely hide the rest of the project — the server never sends it. `npm test`

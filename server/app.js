@@ -282,11 +282,17 @@ app.post('/api/notify', requireUser, wrap(async (req, res) => {
     }
   }
 
-  const out = await mailer.send({
-    to: target.email,
-    subject: String(req.body.subject || 'Terra Clean control tower').slice(0, 200),
-    text: text + (link ? '\n\n' + link : '')
-  });
+  const subject = String(req.body.subject || 'Terra Clean control tower').slice(0, 200);
+  const body = text + (link ? '\n\n' + link : '');
+
+  /* Compose only: hand the finished message back so it can be opened in the
+     sender's own mail app. Their mailbox does the sending, which is the one
+     route a corporate filter will always trust. */
+  if (req.body.compose) {
+    return json(res, 200, { composed: true, to: target.email, subject, text: body, invite: issued });
+  }
+
+  const out = await mailer.send({ to: target.email, subject, text: body });
   json(res, 200, Object.assign({}, out, { invite: issued, provider: mailer.provider }));
 }));
 
