@@ -58,32 +58,35 @@ module.exports = function seed() {
   /* The live portfolio, from the substation and PPA tables.
      Morena keeps the detailed breakdown and S-curve from the original plan;
      the rest start on the same standard breakdown, ready to be shaped. */
+  /* The portfolio exactly as it stands in the capacity sheet: state code,
+     substation, solar MWp, wind MW, and how it connects. */
   const PORTFOLIO = [
-    { name: 'Morena', state: 'Madhya Pradesh', solar: 465, wind: 0 },
-    { name: 'Sisrana', state: 'Gujarat', solar: 155, wind: 0 },
-    { name: 'Davanagere', state: 'Karnataka', solar: 0, wind: 300 },
-    { name: 'Saurashtra', state: 'Gujarat', solar: 0, wind: 100 },
-    { name: 'Ananthapuram III – ISTS', state: 'Andhra Pradesh', solar: 465, wind: 0 },
-    { name: 'Krishnagiri PS (Kurnool V) – ISTS', state: 'Andhra Pradesh', solar: 542.5, wind: 0 },
-    { name: 'Bhachau/Lakhadia II – ISTS', state: 'Gujarat', solar: 0, wind: 249.1 },
-    { name: 'Pali – ISTS', state: 'Rajasthan', solar: 240.3, wind: 0 },
-    { name: 'Khavda VII – ISTS', state: 'Gujarat', solar: 387.5, wind: 100 },
-    { name: 'Solapur – ISTS', state: 'Maharashtra', solar: 465, wind: 0 },
-    { name: 'Ananthapuram III (Ph-2) – ISTS', state: 'Andhra Pradesh', solar: 930, wind: 0 },
-    { name: 'Bhalgamda, Morbi – InSTS', state: 'Gujarat', solar: 465, wind: 0 },
-    { name: 'Sahjahanpur, Jalaun – InSTS', state: 'Uttar Pradesh', solar: 125.6, wind: 0 },
-    { name: 'Purakalan, Lalitpur – InSTS', state: 'Uttar Pradesh', solar: 37.2, wind: 0 },
-    { name: 'Jamgaon – InSTS', state: 'Maharashtra', solar: 77.5, wind: 50 },
-    { name: 'Karur – InSTS', state: 'Tamil Nadu', solar: 77.5, wind: 50 }
+    { state: 'MP',  name: 'Morena',                        solar: 465,   wind: 0,     conn: 'ISTS' },
+    { state: 'GJ',  name: 'Sisrana',                       solar: 155,   wind: 0,     conn: 'InSTS' },
+    { state: 'KA',  name: 'Davanagere',                    solar: 0,     wind: 300,   conn: 'ISTS' },
+    { state: 'GJ',  name: 'Saurashtra',                    solar: 0,     wind: 100,   conn: 'InSTS' },
+    { state: 'AP',  name: 'Ananthapuram III',              solar: 465,   wind: 0,     conn: 'ISTS' },
+    { state: 'AP',  name: 'Krishnagiri PS (Kurnool V)',    solar: 542.5, wind: 0,     conn: 'ISTS' },
+    { state: 'GJ',  name: 'Bhachau / Lakhadia II',         solar: 0,     wind: 249.1, conn: 'ISTS' },
+    { state: 'RJ',  name: 'Pali',                          solar: 240.3, wind: 0,     conn: 'ISTS' },
+    { state: 'GJ',  name: 'Khavda VII',                    solar: 387.5, wind: 100,   conn: 'ISTS' },
+    { state: 'MH',  name: 'Solapur',                       solar: 465,   wind: 0,     conn: 'ISTS' },
+    { state: 'AP',  name: 'Ananthapuram III (Ph-2)',       solar: 930,   wind: 0,     conn: 'ISTS' },
+    { state: 'GJ',  name: 'Bhalgamda, Morbi',              solar: 465,   wind: 0,     conn: 'InSTS' },
+    { state: 'UP',  name: 'Sahjahanpur, Jalaun',           solar: 125.6, wind: 0,     conn: 'InSTS' },
+    { state: 'UP',  name: 'Purakalan, Lalitpur',           solar: 37.2,  wind: 0,     conn: 'InSTS' },
+    { state: 'MH',  name: 'Jamgaon',                       solar: 77.5,  wind: 50,    conn: 'InSTS' },
+    { state: 'TN',  name: 'Karur',                         solar: 77.5,  wind: 50,    conn: 'InSTS' }
   ];
 
-  const projects = PORTFOLIO.map((row, i) => newProject({
+  const projects = PORTFOLIO.map(row => newProject({
     name: row.name,
-    site: row.name.split(/[,–]/)[0].trim(),
+    site: row.name.split(',')[0].trim(),
     state: row.state,
     solar: row.solar,
     wind: row.wind,
     bess: 0,
+    conn: row.conn,
     setup: false
   }));
 

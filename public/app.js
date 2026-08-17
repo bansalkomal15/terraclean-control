@@ -799,36 +799,37 @@ function viewProjects() {
   });
   v.appendChild(sortBar);
 
-  /* ---- comparison table ---- */
+  /* ---- the portfolio, laid out like the capacity sheet ---- */
   const watch = S.watch || [];
   const tbl = el('table', 'tbl ptbl');
   tbl.innerHTML = '<thead><tr>' +
-    ['Project', 'Capacity', 'Progress against plan', 'Status']
-      .concat(watch.map(p2 => trim(labelForPath(p2), 18)))
-      .concat(['COD', 'Open', 'Past due', 'Lead'])
-      .map((h, i) => `<th${i >= 5 ? ' class="r"' : ''}>${esc(h)}</th>`).join('') + '</tr></thead>';
+    ['State', 'Substation', 'Solar MWp', 'Wind MW', 'Total', 'Connectivity', 'Owner', 'Progress against plan', 'Status']
+      .concat(watch.map(p2 => trim(labelForPath(p2), 16)))
+      .concat(['COD', 'Past due'])
+      .map((h, i) => `<th${[2, 3, 4].indexOf(i) >= 0 || i >= 9 ? ' class="r"' : ''}>${esc(h)}</th>`).join('') +
+    '</tr></thead>';
   const tb = el('tbody');
+  let sumSolar = 0, sumWind = 0;
+
   list.forEach(p => {
+    const solar = +p.solar || 0, wind = +p.wind || 0;
+    sumSolar += solar; sumWind += wind;
     const pr = projProg(p), pl = plannedNow(p), h = health(p);
     const tr = el('tr');
+
+    tr.appendChild(el('td', 'sub', esc(p.state || '—')));
+
     const c1 = el('td');
     const lk = el('button', 'linkish', esc(p.name)); lk.onclick = () => go('project', p.id);
-    c1.append(lk, el('div', 'sub', esc([p.site, p.state].filter(Boolean).join(', ') || 'Location not set')));
+    c1.appendChild(lk);
     tr.appendChild(c1);
-    tr.appendChild(el('td', '', `<b class="num">${((+p.solar || 0) + (+p.wind || 0))}</b> <span class="sub">MW</span>
-      <div class="capbar" title="Solar ${p.solar || 0} · Wind ${p.wind || 0} MW, BESS ${p.bess || 0} MWh">
-        <i style="flex:${+p.solar || 0};background:var(--saffron)"></i><i style="flex:${+p.wind || 0};background:var(--moonstone)"></i><i style="flex:${(+p.bess || 0) / 4};background:var(--violet)"></i></div>`));
-    tr.appendChild(el('td', '', `<div style="display:flex;justify-content:space-between;font-size:11.5px"><b class="num">${pct(pr)}</b><span class="sub">${h.none ? 'no dates' : pct(pl) + ' plan'}</span></div>
-      <div class="bar" style="min-width:120px;margin-top:3px"><i class="${h.cls === 'risk' ? 'bad' : h.cls === 'watch' ? 'warn' : ''}" style="width:${Math.min(100, pr * 100)}%"></i>${h.none ? '' : `<span class="plan" style="left:${Math.min(100, pl * 100)}%"></span>`}</div>`));
-    tr.appendChild(el('td', '', `<span class="tag ${p.setup ? 'idle' : h.cls}">${p.setup ? 'Not set up' : h.label}</span>${h.none || p.setup ? '' : `<div class="sub num">${(h.v >= 0 ? '+' : '') + (h.v * 100).toFixed(1)} pts</div>`}`));
-    watch.forEach(path => {
-      const n = findByPath(p, path);
-      tr.appendChild(el('td', '', n ? `<span class="tag ${tagClass(statusOf(n), isLate(n))}">${esc(statusOf(n))}</span><div class="sub num">${pct0(progOf(n))}</div>` : '<span class="sub">—</span>'));
-    });
-    tr.appendChild(el('td', 'r num', p.cod ? mLabel(p.cod) : '—'));
-    tr.appendChild(el('td', 'r num', String(countOpen(p))));
-    tr.appendChild(el('td', 'r num' + (countLate(p) ? ' late' : ''), String(countLate(p))));
-    const ld = el('td', 'r');
+
+    tr.appendChild(el('td', 'r num', solar ? fmt(solar) : '—'));
+    tr.appendChild(el('td', 'r num', wind ? fmt(wind) : '—'));
+    tr.appendChild(el('td', 'r num', '<b>' + fmt(solar + wind) + '</b>'));
+    tr.appendChild(el('td', '', p.conn ? `<span class="tag idle">${esc(p.conn)}</span>` : '<span class="sub">—</span>'));
+
+    const ld = el('td');
     if (isCEO()) {
       const sel = el('select'); sel.className = 'inline';
       sel.innerHTML = '<option value="">— nobody —</option>' +
@@ -837,10 +838,39 @@ function viewProjects() {
       ld.appendChild(sel);
     } else ld.textContent = pname(p.head);
     tr.appendChild(ld);
+
+    tr.appendChild(el('td', '', `<div style="display:flex;justify-content:space-between;font-size:11.5px"><b class="num">${pct(pr)}</b><span class="sub">${h.none ? 'no dates' : pct(pl) + ' plan'}</span></div>
+      <div class="bar" style="min-width:110px;margin-top:3px"><i class="${h.cls === 'risk' ? 'bad' : h.cls === 'watch' ? 'warn' : ''}" style="width:${Math.min(100, pr * 100)}%"></i>${h.none ? '' : `<span class="plan" style="left:${Math.min(100, pl * 100)}%"></span>`}</div>`));
+
+    tr.appendChild(el('td', '', `<span class="tag ${p.setup ? 'idle' : h.cls}">${p.setup ? 'Not set up' : h.label}</span>`));
+
+    watch.forEach(path => {
+      const n = findByPath(p, path);
+      tr.appendChild(el('td', '', n ? `<span class="tag ${tagClass(statusOf(n), isLate(n))}">${esc(statusOf(n))}</span><div class="sub num">${pct0(progOf(n))}</div>` : '<span class="sub">—</span>'));
+    });
+
+    tr.appendChild(el('td', 'r num', p.cod ? mLabel(p.cod) : '—'));
+    tr.appendChild(el('td', 'r num' + (countLate(p) ? ' late' : ''), String(countLate(p))));
     tb.appendChild(tr);
   });
   tbl.appendChild(tb);
-  v.appendChild(section('Portfolio at a glance', 'Every project on one line. Status columns are the ones you chose; change them from the top right.', tbl));
+
+  /* the line that matters at the bottom of any capacity sheet */
+  const tf = el('tfoot');
+  const ftr = el('tr', 'totals');
+  ftr.appendChild(el('td', '', ''));
+  ftr.appendChild(el('td', '', '<b>Total · ' + list.length + ' projects</b>'));
+  ftr.appendChild(el('td', 'r num', '<b>' + fmt(sumSolar) + '</b>'));
+  ftr.appendChild(el('td', 'r num', '<b>' + fmt(sumWind) + '</b>'));
+  ftr.appendChild(el('td', 'r num', '<b>' + fmt(sumSolar + sumWind) + '</b>'));
+  const rest = el('td', 'sub');
+  rest.colSpan = 5 + watch.length;
+  rest.innerHTML = 'MWp solar and MW wind, as entered on each project';
+  ftr.appendChild(rest);
+  tf.appendChild(ftr);
+  tbl.appendChild(tf);
+
+  v.appendChild(section('Portfolio at a glance', 'Every project on one line, with the capacity totals underneath. Click a name to open it.', tbl));
 
   /* ---- heatmap ---- */
   const codes = (list[0] || S.projects[0] || { packages: [] }).packages;
@@ -885,55 +915,40 @@ function addManyProjects() {
   const d = openDrawerEl(dHead('Projects', 'Add several at once') + '<div class="dbody" id="db"></div>');
   wireClose(d);
   const b = document.getElementById('db');
-  b.innerHTML = `<p class="sub" style="margin-top:0">One project per line. Separate the columns with a vertical bar, a tab or a comma:</p>
-    <div class="fmtline">Name │ State │ Solar MWp │ Wind MW │ BESS MWh</div>
-    <p class="sub">The last three are numbers and may be left out. Copy straight from a spreadsheet if that is easier — tabs work.</p>`;
+  b.innerHTML = `<p class="sub" style="margin-top:0">Paste the capacity sheet straight in — headings included. These are recognised, in any order:</p>
+    <div class="fmtline">State │ Substation │ Solar Capacity (MWp) │ Wind Capacity (MW) │ Connectivity</div>
+    <p class="sub">Total columns are ignored; it adds those up itself. Without a heading row it reads them as Name, State, Solar, Wind, BESS.</p>`;
 
   const ta = el('textarea'); ta.rows = 12; ta.className = 'bulk';
-  ta.placeholder = 'Ananthapuram III – ISTS | Andhra Pradesh | 465 | 0\nKhavda VII – ISTS | Gujarat | 387.5 | 100';
+  ta.placeholder = 'State\tSubstation\tSolar Capacity (MWp)\tWind Capacity (MW)\tConnectivity\nMP\tMorena\t465\t0\tISTS';
   b.appendChild(ta);
 
   const tplRow = el('label', 'fld'); tplRow.style.marginTop = '14px';
-  tplRow.innerHTML = '<span>Breakdown to start each one on</span>';
+  tplRow.innerHTML = '<span>Breakdown to start each new one on</span>';
   const tpl = el('select');
   tpl.innerHTML = '<option value="__std">The standard breakdown</option><option value="">None — build it later</option>' +
     (S.templates || []).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
   tplRow.appendChild(tpl);
   b.appendChild(tplRow);
 
-  const preview = el('div', 'sub'); preview.style.margin = '4px 0 12px';
-  b.appendChild(preview);
-
-  const parseLines = () => {
-    const out = [];
-    ta.value.split('\n').forEach(line => {
-      const raw = line.trim();
-      if (!raw) return;
-      const sep = raw.indexOf('|') >= 0 ? '|' : (raw.indexOf('\t') >= 0 ? '\t' : ',');
-      const c = raw.split(sep).map(x => x.trim());
-      if (!c[0]) return;
-      out.push({
-        name: c[0], state: c[1] || '',
-        solar: +(c[2] || 0) || 0, wind: +(c[3] || 0) || 0, bess: +(c[4] || 0) || 0,
-        existing: S.projects.find(p => p.name.trim().toLowerCase() === c[0].toLowerCase()) || null
-      });
-    });
-    return out;
-  };
   const upd = el('label', 'pickrow'); upd.style.borderBottom = '0';
   upd.innerHTML = `<input type="checkbox" id="bulkUpd" checked style="width:auto">
-    <span><b>Correct the capacity on projects already here</b>
-    <div class="sub">A name that matches keeps its breakdown, progress and history — only the solar, wind and BESS figures are set from this list.</div></span>`;
+    <span><b>Update projects already here</b>
+    <div class="sub">A matching name keeps its breakdown, progress and history — only state, capacity and connectivity are set from this list. Names are matched loosely, so “Pali – ISTS” and “Pali” count as the same project.</div></span>`;
   b.appendChild(upd);
 
+  const preview = el('div', 'sub'); preview.style.margin = '8px 0 12px';
+  b.appendChild(preview);
+
   const refresh = () => {
-    const rows = parseLines();
+    const rows = parseProjectLines(ta.value);
     const dupes = rows.filter(r => r.existing).length;
-    const mw = rows.filter(r => !r.existing).reduce((a, r) => a + r.solar + r.wind, 0);
     const doUpd = (document.getElementById('bulkUpd') || {}).checked;
+    const solar = rows.reduce((x, r) => x + r.solar, 0), wind = rows.reduce((x, r) => x + r.wind, 0);
     preview.innerHTML = rows.length
-      ? '<b>' + (rows.length - dupes) + '</b> to add' + (mw ? ', ' + mw.toFixed(1) + ' MW' : '') +
-        (dupes ? ' · <b>' + dupes + '</b> already here' + (doUpd ? ', capacity will be corrected' : ', left alone') : '')
+      ? '<b>' + (rows.length - dupes) + '</b> to add · <b>' + dupes + '</b> already here' +
+        (dupes ? (doUpd ? ', to be updated' : ', to be left alone') : '') +
+        '<br>' + fmt(solar) + ' MWp solar · ' + fmt(wind) + ' MW wind · <b>' + fmt(solar + wind) + ' MW</b> in this list'
       : 'Nothing to add yet.';
   };
   ta.oninput = refresh;
@@ -941,61 +956,113 @@ function addManyProjects() {
   refresh();
 
   const row = el('div', 'row');
-  const fill = el('button', 'btn sm', 'Fill in the substation list');
-  fill.title = 'The projects from the substation and PPA tables';
+  const fill = el('button', 'btn sm', 'Fill in the capacity sheet');
   fill.onclick = () => { ta.value = SUBSTATION_LIST; refresh(); };
-  const go = el('button', 'btn pri', 'Add them');
+  const go = el('button', 'btn pri', 'Apply');
   go.onclick = () => {
-    const all = parseLines();
+    const all = parseProjectLines(ta.value);
     const doUpd = (document.getElementById('bulkUpd') || {}).checked;
     let fixed = 0;
     if (doUpd) all.filter(r => r.existing).forEach(r => {
       const p = r.existing;
+      p.name = r.name;                      /* take the sheet's spelling */
+      if (r.state) p.state = r.state;
+      if (r.conn) p.conn = r.conn;
       p.solar = r.solar; p.wind = r.wind;
       if (r.bess) p.bess = r.bess;
-      if (r.state) p.state = r.state;
       p.setup = false; fixed++;
     });
-    const rows = all.filter(r => !r.existing);
-    if (!rows.length && !fixed) { toast('Nothing to change'); return; }
-    if (!rows.length) { save(); closeDrawer(); render(); toast('Capacity corrected on ' + fixed + ' project(s)'); return; }
+    const fresh = all.filter(r => !r.existing);
+    if (!fresh.length && !fixed) { toast('Nothing to change'); return; }
+
     let packages = [];
     if (tpl.value === '__std') packages = S.standardTemplate || [];
     else if (tpl.value) { const t = (S.templates || []).find(x => x.id === tpl.value); packages = t ? t.packages : []; }
-    rows.forEach(r => {
+
+    fresh.forEach(r => {
       const p = newProject({
-        name: r.name, state: r.state, solar: r.solar, wind: r.wind, bess: r.bess,
-        site: r.name.split(/[,–-]/)[0].trim(), setup: false
+        name: r.name, state: r.state, conn: r.conn,
+        solar: r.solar, wind: r.wind, bess: r.bess,
+        site: r.name.split(',')[0].trim(), setup: false
       });
       p.packages = packages.length ? packagesFromTemplate(packages) : [];
       renumberProject(p);
       S.projects.push(p);
     });
     save(); closeDrawer(); render();
-    toast(rows.length + ' projects added' + (fixed ? ', ' + fixed + ' corrected' : ''));
+    toast([fresh.length ? fresh.length + ' added' : '', fixed ? fixed + ' updated' : ''].filter(Boolean).join(', '));
   };
   row.append(fill, go);
   b.appendChild(row);
 }
 
+/* "Pali – ISTS", "Pali" and "pali" are all the same project */
+function normName(s) {
+  return String(s || '').toLowerCase()
+    .replace(/[–—-]\s*(ists|insts)\s*$/i, '')
+    .replace(/[\s.]+/g, ' ')
+    .replace(/\s*\/\s*/g, '/')
+    .trim();
+}
+function parseProjectLines(text) {
+  const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const split = l => l.split(l.indexOf('\t') >= 0 ? '\t' : (l.indexOf('|') >= 0 ? '|' : ',')).map(x => x.trim());
+
+  const first = split(lines[0]).map(h => h.toLowerCase());
+  const looksLikeHeader = first.some(h => /substation|state|solar|wind|connectivity|project/.test(h));
+  let idx = { name: 0, state: 1, solar: 2, wind: 3, bess: 4, conn: -1 };
+  let body = lines;
+  if (looksLikeHeader) {
+    const at = re => first.findIndex(h => re.test(h));
+    idx = {
+      name: at(/substation|project|name/), state: at(/state/),
+      solar: at(/solar/), wind: at(/wind/), bess: at(/bess|battery/), conn: at(/connectiv/)
+    };
+    body = lines.slice(1);
+  }
+  const num = v => { const n = parseFloat(String(v || '').replace(/[, ]/g, '')); return isFinite(n) ? n : 0; };
+  const out = [];
+  body.forEach(line => {
+    const c = split(line);
+    const name = (idx.name >= 0 ? c[idx.name] : c[0]) || '';
+    if (!name || /^total$/i.test(name)) return;      /* skip the sheet's own total row */
+    const key = normName(name);
+    out.push({
+      name,
+      state: idx.state >= 0 ? (c[idx.state] || '') : '',
+      solar: idx.solar >= 0 ? num(c[idx.solar]) : 0,
+      wind: idx.wind >= 0 ? num(c[idx.wind]) : 0,
+      bess: idx.bess >= 0 ? num(c[idx.bess]) : 0,
+      conn: idx.conn >= 0 ? (c[idx.conn] || '') : '',
+      existing: S.projects.find(p => normName(p.name) === key) || null
+    });
+  });
+  return out;
+}
+
 const SUBSTATION_LIST = [
-  'Morena | Madhya Pradesh | 465 | 0',
-  'Sisrana | Gujarat | 155 | 0',
-  'Davanagere | Karnataka | 0 | 300',
-  'Saurashtra | Gujarat | 0 | 100',
-  'Ananthapuram III – ISTS | Andhra Pradesh | 465 | 0',
-  'Krishnagiri PS (Kurnool V) – ISTS | Andhra Pradesh | 542.5 | 0',
-  'Bhachau/Lakhadia II – ISTS | Gujarat | 0 | 249.1',
-  'Pali – ISTS | Rajasthan | 240.3 | 0',
-  'Khavda VII – ISTS | Gujarat | 387.5 | 100',
-  'Solapur – ISTS | Maharashtra | 465 | 0',
-  'Ananthapuram III (Ph-2) – ISTS | Andhra Pradesh | 930 | 0',
-  'Bhalgamda, Morbi – InSTS | Gujarat | 465 | 0',
-  'Sahjahanpur, Jalaun – InSTS | Uttar Pradesh | 125.6 | 0',
-  'Purakalan, Lalitpur – InSTS | Uttar Pradesh | 37.2 | 0',
-  'Jamgaon – InSTS | Maharashtra | 77.5 | 50',
-  'Karur – InSTS | Tamil Nadu | 77.5 | 50'
+  'State\tSubstation\tSolar Capacity (MWp)\tWind Capacity (MW)\tConnectivity',
+  'MP\tMorena\t465\t0\tISTS',
+  'GJ\tSisrana\t155\t0\tInSTS',
+  'KA\tDavanagere\t0\t300\tISTS',
+  'GJ\tSaurashtra\t0\t100\tInSTS',
+  'AP\tAnanthapuram III\t465\t0\tISTS',
+  'AP\tKrishnagiri PS (Kurnool V)\t542.5\t0\tISTS',
+  'GJ\tBhachau / Lakhadia II\t0\t249.1\tISTS',
+  'RJ\tPali\t240.3\t0\tISTS',
+  'GJ\tKhavda VII\t387.5\t100\tISTS',
+  'MH\tSolapur\t465\t0\tISTS',
+  'AP\tAnanthapuram III (Ph-2)\t930\t0\tISTS',
+  'GJ\tBhalgamda, Morbi\t465\t0\tInSTS',
+  'UP\tSahjahanpur, Jalaun\t125.6\t0\tInSTS',
+  'UP\tPurakalan, Lalitpur\t37.2\t0\tInSTS',
+  'MH\tJamgaon\t77.5\t50\tInSTS',
+  'TN\tKarur\t77.5\t50\tInSTS'
 ].join('\n');
+
+/* keeps 465 as 465 and 542.5 as 542.5, rather than 465.0 */
+function fmt(n) { return (Math.round(n * 10) / 10).toLocaleString('en-IN'); }
 
 function scopedProjectTable(list) {
   const wrap = el('div');
@@ -1017,10 +1084,16 @@ function scopedProjectTable(list) {
     tr.appendChild(el('td', 'r', `<div class="bar" style="min-width:90px"><i style="width:${Math.min(100, myProg * 100)}%"></i></div><div class="num" style="font-size:11px;margin-top:3px">${pct0(myProg)}</div>`));
     tr.appendChild(el('td', 'r num', p.cod ? mLabel(p.cod) : '—'));
     tr.appendChild(el('td', 'sub', esc(pname(p.head))));
-    tr.appendChild(el('td', 'r', lead ? '<span class="tag ok">You lead this</span>' : '<span class="sub">' + mine.length + ' items yours</span>'));
+    tr.appendChild(el('td', 'r', lead ? '<span class="tag ok">You own this</span>' : '<span class="sub">—</span>'));
     tb.appendChild(tr);
   });
-  t.appendChild(tb); wrap.appendChild(t);
+  t.appendChild(tb);
+  const tf = el('tfoot'), ftr = el('tr', 'totals');
+  const sSolar = list.reduce((a, p) => a + (+p.solar || 0), 0), sWind = list.reduce((a, p) => a + (+p.wind || 0), 0);
+  ftr.innerHTML = `<td><b>Total · ${list.length} projects</b></td><td class="r num"><b>${fmt(sSolar + sWind)} MW</b></td>` +
+    '<td colspan="6" class="sub">' + fmt(sSolar) + ' MWp solar · ' + fmt(sWind) + ' MW wind</td>';
+  tf.appendChild(ftr); t.appendChild(tf);
+  wrap.appendChild(t);
   return section('Your projects', 'Only the projects you lead or hold work in. Figures are your own items, not the whole project.', wrap);
 }
 function lens(cur) {
@@ -1091,7 +1164,7 @@ function viewProject() {
       <div class="l"><span class="tag ${h.cls}">${h.label}${h.none ? '' : ' · ' + (h.v >= 0 ? '+' : '') + (h.v * 100).toFixed(1) + ' pts'}</span></div>
       <div class="bar" style="margin-top:8px"><i class="${h.cls === 'risk' ? 'bad' : h.cls === 'watch' ? 'warn' : ''}" style="width:${Math.min(100, pr * 100)}%"></i>${h.none ? '' : `<span class="plan" style="left:${Math.min(100, pl * 100)}%"></span>`}</div></div>
     <div class="metric"><div class="eyebrow">Site</div><div style="margin:6px 0 3px;font-size:15px">${esc([p.site, p.state].filter(Boolean).join(', ') || '—')}</div>
-      <div class="l">Target COD <b class="num">${p.cod ? mLabel(p.cod) : '—'}</b></div></div>
+      <div class="l">${p.conn ? esc(p.conn) + ' · ' : ''}Target COD <b class="num">${p.cod ? mLabel(p.cod) : '—'}</b></div></div>
     <div class="metric"><div class="eyebrow">Exceptions</div><div class="v">${countLate(p)}</div>
       <div class="l">Past due · ${asksFor(p.id).length} with the CEO · ${(p.chg || []).length} changes</div></div>`;
   v.appendChild(m);
@@ -2486,8 +2559,13 @@ function viewPeople() {
 function editProject(p) {
   const d = openDrawerEl(dHead('Projects', 'Edit details') + `<div class="dbody">
     <label class="fld"><span>Project name</span><input type="text" id="eName" value="${esc(p.name)}"></label>
-    <div class="grid2"><label class="fld"><span>Site / village</span><input type="text" id="eSite" value="${esc(p.site || '')}"></label>
-    <label class="fld"><span>State</span><input type="text" id="eState" value="${esc(p.state || '')}"></label></div>
+    <div class="grid3"><label class="fld"><span>Site / village</span><input type="text" id="eSite" value="${esc(p.site || '')}"></label>
+    <label class="fld"><span>State</span><input type="text" id="eState" value="${esc(p.state || '')}" placeholder="MP"></label>
+    <label class="fld"><span>Connectivity</span><select id="eConn">
+      <option value="" ${!p.conn ? 'selected' : ''}>—</option>
+      <option ${p.conn === 'ISTS' ? 'selected' : ''}>ISTS</option>
+      <option ${p.conn === 'InSTS' ? 'selected' : ''}>InSTS</option>
+    </select></label></div>
     <div class="grid3"><label class="fld"><span>Solar MW</span><input type="number" id="eSolar" value="${p.solar || 0}"></label>
     <label class="fld"><span>Wind MW</span><input type="number" id="eWind" value="${p.wind || 0}"></label>
     <label class="fld"><span>BESS MWh</span><input type="number" id="eBess" value="${p.bess || 0}"></label></div>
@@ -2508,7 +2586,7 @@ function editProject(p) {
   const sum = () => { const t = p.packages.reduce((a, k) => a + (k.pw || 0), 0); tot.innerHTML = `Total <b class="num" style="color:${Math.abs(t - 1) < .005 ? 'var(--midnight)' : 'var(--tangerine)'}">${(t * 100).toFixed(1)}%</b>`; };
   sum();
   $('#eSave', d).onclick = () => {
-    Object.assign(p, { name: $('#eName', d).value.trim() || p.name, site: $('#eSite', d).value.trim(), state: $('#eState', d).value.trim(), solar: +$('#eSolar', d).value || 0, wind: +$('#eWind', d).value || 0, bess: +$('#eBess', d).value || 0, cod: $('#eCod', d).value, head: $('#eHead', d).value, setup: false });
+    Object.assign(p, { name: $('#eName', d).value.trim() || p.name, site: $('#eSite', d).value.trim(), state: $('#eState', d).value.trim(), conn: $('#eConn', d).value, solar: +$('#eSolar', d).value || 0, wind: +$('#eWind', d).value || 0, bess: +$('#eBess', d).value || 0, cod: $('#eCod', d).value, head: $('#eHead', d).value, setup: false });
     save(); closeDrawer(); render(); toast('Saved');
   };
   $('#eDel', d).onclick = () => { if (confirm('Delete “' + p.name + '” and all its tasks?')) { S.projects = S.projects.filter(x => x.id !== p.id); save(); closeDrawer(); go('projects'); } };
