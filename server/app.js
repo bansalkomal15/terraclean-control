@@ -12,6 +12,7 @@ const S = require('../lib/scope');
 const renumber = require('../lib/renumber');
 
 const PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+const BUILD = '2026-08-17-c';   /* bump when the code changes, so it is obvious what is live */
 const app = express();
 
 app.set('trust proxy', 1);
@@ -301,11 +302,18 @@ app.post('/api/org/login-mail', requireUser, requireAdmin, wrap(async (req, res)
   if (!target) return json(res, 404, { error: 'no such person' });
   if (!target.email) return json(res, 400, { error: 'Give them an email address first — that is their login.' });
 
-  const pw = String(req.body.password || '').trim() || auth.generatePassword();
-  const problem = auth.passwordProblem(pw);
-  if (problem) return json(res, 400, { error: problem });
+  const keep = !!req.body.keep;
+  const existing = await auth.getCredential(target.email);
+  let pw = String(req.body.password || '').trim().toLowerCase();
 
-  await auth.setCredential(target.email, pw);
+  if (keep && existing) {
+    pw = null;                                   /* leave their password exactly as it is */
+  } else {
+    if (!pw) pw = auth.generatePassword();
+    const problem = auth.passwordProblem(pw);
+    if (problem) return json(res, 400, { error: problem });
+    await auth.setCredential(target.email, pw);
+  }
   await auth.clearInvite(target.email);
   target.signin = 'password';
   await store.writeDoc(rev, state);
@@ -315,16 +323,16 @@ app.post('/api/org/login-mail', requireUser, requireAdmin, wrap(async (req, res)
   const text = 'Hello ' + target.name + ',\n\nYou have access to the Terra Clean control tower.\n\n' +
     (link ? 'Open:     ' + link + '\n' : '') +
     'Login:    ' + target.email + '\n' +
-    'Password: ' + pw + '\n\n' +
-    'Type your email, press Continue, then enter this password.\n' +
+    (pw ? 'Password: ' + pw + '\n' : 'Password: the one you were given before\n') + '\n' +
+    'Type your email, press Continue, then enter the password.\n' +
     'You can change it afterwards under Settings.\n\n— Terra Clean control tower';
 
   const wants = String(req.body.mode || 'compose');
   if (wants === 'send') {
     const out = await mailer.send({ to: target.email, subject, text });
-    return json(res, 200, Object.assign({ password: pw, to: target.email, subject, text }, out));
+    return json(res, 200, Object.assign({ password: pw, kept: !pw, to: target.email, subject, text }, out));
   }
-  json(res, 200, { composed: true, password: pw, to: target.email, subject, text });
+  json(res, 200, { composed: true, password: pw, kept: !pw, hasPassword: !!(pw || existing), to: target.email, subject, text });
 }));
 
 /* Send a test message, so email can be proved to work before it matters. */
@@ -380,6 +388,7 @@ app.get('/api/health', wrap(async (req, res) => {
   } catch (e) { projects = 'error: ' + e.message; }
   json(res, 200, {
     ok: true,
+    build: BUILD,
     storage: store.driverKind(),
     mail: mailer.configured,
     mailProvider: mailer.provider,

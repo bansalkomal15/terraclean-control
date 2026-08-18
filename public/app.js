@@ -21,6 +21,7 @@ const inThisMonth = d => !!d && d.slice(0, 7) === today().slice(0, 7);
 const trim = (s, k) => String(s).length > k ? String(s).slice(0, k - 1) + '…' : s;
 
 /* ---------- server-backed state ---------- */
+const BUILD = '2026-08-17-c';   /* shown in Settings; check it matches the server */
 let S = null, REV = 0, VIEW = 'dashboard', PID = null, ME = null;
 
 /* Things that are personal to this browser rather than shared company data —
@@ -54,7 +55,49 @@ async function api(method, url, body) {
    If somebody else saved first the server hands back the current picture and
    we redraw rather than overwrite their work. */
 let syncTimer = null, syncing = false, dirty = false;
+
+/* ---------- undo and redo ----------
+   Every change is a step. We keep the picture as it was before each one, so
+   stepping back is exact — a deleted package returns with its progress, its
+   history and its dates, not an approximation of them. */
+const HIST = { past: [], future: [], last: null, depth: 60 };
+function markHistory() {
+  if (HIST.last !== null) {
+    HIST.past.push(HIST.last);
+    if (HIST.past.length > HIST.depth) HIST.past.shift();
+    HIST.future.length = 0;
+  }
+  HIST.last = JSON.stringify(S);
+}
+function stepTo(snapshot, stack) {
+  stack.push(HIST.last);
+  HIST.last = snapshot;
+  S = JSON.parse(snapshot);
+  S.viewer = S.viewerId;
+  _tpl = null;
+  dirty = true; setSyncState('pending');
+  clearTimeout(syncTimer); syncTimer = setTimeout(flush, 300);
+  closeDrawer(); render();
+}
+function undo() {
+  if (!HIST.past.length) { toast('Nothing to undo'); return; }
+  stepTo(HIST.past.pop(), HIST.future);
+  toast('Undone');
+}
+function redo() {
+  if (!HIST.future.length) { toast('Nothing to redo'); return; }
+  stepTo(HIST.future.pop(), HIST.past);
+  toast('Redone');
+}
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+  else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); }
+});
+
 function save() {
+  markHistory();
   _tpl = null;                      /* names may have changed; rebuild the path labels */
   dirty = true; setSyncState('pending');
   clearTimeout(syncTimer); syncTimer = setTimeout(flush, 600);
@@ -63,12 +106,15 @@ function save() {
    (setting a password, restoring a backup, cleaning up numbering). */
 async function reloadState() {
   const out = await api('GET', '/api/state');
-  REV = out.rev; adoptState(out.state); render();
+  REV = out.rev; adoptState(out.state);
+  HIST.past.length = 0; HIST.future.length = 0; HIST.last = JSON.stringify(S);
+  render();
 }
 async function flush() {
   if (syncing || !dirty) return;
   syncing = true; dirty = false; setSyncState('saving');
   try {
+    const alert = document.getElementById('saveAlert'); if (alert) alert.remove();
     const out = await api('PUT', '/api/state', { rev: REV, state: S });
     /* Keep our own objects. Replacing S here would orphan every reference an
        open panel is holding, and the next edit in it would vanish. The server
@@ -80,7 +126,18 @@ async function flush() {
       render(); toast('Someone else saved first — the page has been refreshed');
     } else if (e.status === 401) {
       setSyncState('signed-out'); showLogin('Your session ended. Sign in again.');
-    } else { setSyncState('error'); toast('Could not save: ' + e.message); dirty = true; }
+    } else {
+      setSyncState('error'); dirty = true;
+      toast('Not saved — ' + e.message);
+      const n = document.getElementById('saveAlert');
+      if (!n) {
+        const bar = el('div', 'savealert');
+        bar.id = 'saveAlert';
+        bar.innerHTML = '<b>Your last change has not been saved.</b> ' + esc(e.message) +
+          ' — keep this tab open; it will keep trying.';
+        document.body.appendChild(bar);
+      }
+    }
   } finally {
     syncing = false;
     if (dirty) setTimeout(flush, 400);
@@ -276,6 +333,20 @@ function dHead(kicker, title) {
 function wireClose(d) { $('#dclose', d).onclick = closeDrawer; }
 
 const ADMIN_ONLY = ['offtake', 'enablers', 'people', 'org'];
+function undoBar() {
+  const w = el('div', 'undobar');
+  const u = el('button', 'btn sm', '↶ Undo');
+  u.disabled = !HIST.past.length;
+  u.title = 'Ctrl+Z';
+  u.onclick = undo;
+  const r = el('button', 'btn sm', '↷ Redo');
+  r.disabled = !HIST.future.length;
+  r.title = 'Ctrl+Shift+Z';
+  r.onclick = redo;
+  w.append(u, r);
+  return w;
+}
+
 function renderRail() {
   const p = person(S.viewer) || {};
   $('#whoName').textContent = p.name || '';
@@ -598,6 +669,7 @@ function viewDashboard() {
   if (!isCEO()) return viewMyDesk();
   $('#crumb').textContent = 'Deliver'; $('#title').textContent = 'Dashboard';
   const ta = $('#topActions'); ta.innerHTML = '';
+  ta.appendChild(undoBar());
   const v = $('#view'); v.innerHTML = '';
 
   const ps = S.projects;
@@ -644,10 +716,6 @@ function viewDashboard() {
     taskTable(bucket(items, 'daily'), { defaultDue: today(), placeholder: 'Add a task for today', emptyText: 'Nothing overdue today.' })));
   v.appendChild(section('Weekly tracker — next seven days', 'Falls due before ' + dLabel(addDays(today(), 7)) + '.',
     taskTable(bucket(items, 'weekly'), { defaultDue: addDays(today(), 7), placeholder: 'Add a task for this week', emptyText: 'Nothing falls due in the next seven days.' })));
-  const later = bucket(items, 'later').filter(i => i.kind === 'task');
-  if (later.length) v.appendChild(section('Later', 'Tasks dated beyond this week.', taskTable(later, { add: false })));
-
-  /* a finished enabler stays on the dashboard, struck through, until the end of that month */
   const ens = S.enablers.filter(e => e.status !== 'Done' || inThisMonth(e.doneOn)).sort((a, b) => String(a.end || '9').localeCompare(String(b.end || '9')));
   v.appendChild(section('Enablers', 'Approvals, appointments and opportunities that sit above the projects. Completed ones stay listed until the end of the month.',
     ens.length ? tableOf(['Task to be done', 'For what', 'Counterparty', 'Owner', 'End date', 'Status'],
@@ -684,48 +752,77 @@ function myProjects(id) { return S.projects.filter(p => p.head === id); }
 function viewMyDesk() {
   const me = S.viewer, who = person(me) || {};
   $('#crumb').textContent = 'My desk'; $('#title').textContent = who.name || 'My work';
-  $('#topActions').innerHTML = '';
+  const ta = $('#topActions'); ta.innerHTML = ''; ta.appendChild(undoBar());
   const v = $('#view'); v.innerHTML = '';
-  const mine = dueItems(me), mps = myProjects(me);
-  const lateN = mine.filter(i => i.d && i.d < today()).length;
-  const raised = S.asks.filter(a => a.raisedBy === who.name);
 
-  const m = el('div', 'metrics'); m.style.marginBottom = '28px';
-  m.innerHTML = `<div class="metric"><div class="eyebrow">Assigned to me</div><div class="v">${mine.length}</div><div class="l">${esc(who.role || '')}</div></div>
-    <div class="metric"><div class="eyebrow">Past due</div><div class="v">${lateN}</div><div class="l">Needs a date change or a push</div></div>
-    <div class="metric"><div class="eyebrow">My projects</div><div class="v">${mps.length}</div><div class="l">Where I lead or own work</div></div>
-    <div class="metric"><div class="eyebrow">With the CEO</div><div class="v">${raised.filter(a => a.status !== 'done').length}</div><div class="l">Items I have raised</div></div>`;
+  const mine = dueItems(me);
+  const mps = myProjects(me);
+  const myEnablers = (S.enablers || []).filter(e => e.owner === me && e.status !== 'Done');
+  const raised = S.asks.filter(a2 => a2.raisedBy === who.name);
+  const openRaised = raised.filter(a2 => a2.status !== 'done');
+  const lateN = mine.filter(i => i.d && i.d < today() && !i.done).length;
+
+  /* ---- top row: what is mine ---- */
+  const m = el('div', 'metrics'); m.style.marginBottom = '26px';
+  m.innerHTML = `
+    <div class="metric"><div class="eyebrow">Projects assigned</div><div class="v">${mps.length}</div>
+      <div class="l">${esc(mps.map(p => p.name).join(', ') || 'None yet')}</div></div>
+    <div class="metric"><div class="eyebrow">Enablers assigned</div><div class="v">${myEnablers.length}</div>
+      <div class="l">Approvals and appointments in your name</div></div>
+    <div class="metric"><div class="eyebrow">Raised with the CEO</div><div class="v">${openRaised.length}</div>
+      <div class="l">Waiting on a decision</div></div>
+    <div class="metric"><div class="eyebrow">Past due</div><div class="v" ${lateN ? 'style="color:var(--tangerine)"' : ''}>${lateN}</div>
+      <div class="l">Yours, target date gone</div></div>`;
   v.appendChild(m);
 
-  v.appendChild(section('Today and overdue', 'Add your own tasks in the bottom row.',
+  /* ---- my projects ---- */
+  v.appendChild(section('My projects', 'Everything inside these is yours to run.',
+    mps.length ? tableOf(['Project', 'Capacity', 'Conn.', 'Progress', 'Open', 'Past due', 'COD'],
+      mps.map(p => {
+        const open = []; walkLeaves(p, n => { if (!n.closed && progOf(n) < 1) open.push(n); });
+        return [
+          { link: [p.name, () => go('project', p.id)], html: `<div class="sub">${esc([p.site, p.state].filter(Boolean).join(', '))}</div>` },
+          `<span class="num">${((+p.solar || 0) + (+p.wind || 0))} MW</span>`,
+          p.conn ? `<span class="tag idle">${esc(p.conn)}</span>` : '<span class="sub">—</span>',
+          `<div class="bar" style="min-width:90px"><i style="width:${Math.min(100, projProg(p) * 100)}%"></i></div><div class="num" style="font-size:11px;margin-top:3px">${pct(projProg(p))}</div>`,
+          `<span class="num">${open.length}</span>`,
+          `<span class="num ${open.filter(isLate).length ? 'late' : ''}">${open.filter(isLate).length}</span>`,
+          `<span class="num">${p.cod ? mLabel(p.cod) : '—'}</span>`
+        ];
+      })) : el('div', 'empty', 'No project is assigned to you yet. The administrator sets an owner from the top of each project page.')));
+
+  /* ---- my enablers ---- */
+  v.appendChild(section('Enablers assigned to me', 'Approvals, appointments and opportunities in your name.',
+    myEnablers.length ? tableOf(['Task to be done', 'For what', 'Counterparty', 'End date', 'Status'],
+      myEnablers.sort((x, y) => String(x.end || '9').localeCompare(String(y.end || '9'))).map(e => [
+        `<b>${esc(e.title)}</b>${e.purpose ? `<div class="sub">${esc(trim(e.purpose, 72))}</div>` : ''}`,
+        esc(e.forWhat || '—'), esc(e.party || '—'),
+        `<span class="num ${e.end && e.end < today() ? 'late' : ''}">${dLabel(e.end)}</span>`,
+        `<span class="tag ${e.status === 'In progress' ? 'ok' : 'idle'}">${esc(e.status)}</span>`
+      ])) : el('div', 'empty', 'No enablers are assigned to you.')));
+
+  /* ---- what I have put to the CEO ---- */
+  const rs = el('div');
+  if (raised.length) rs.appendChild(tableOf(['What I asked for', 'Project', 'Urgency', 'Needed by', 'Status'],
+    raised.map(a2 => [
+      `<b>${esc(a2.title)}</b>${a2.note ? `<div class="sub">${esc(trim(a2.note, 80))}</div>` : ''}`,
+      esc((proj(a2.projectId) || {}).name || '—'),
+      `<span class="tag ${a2.urgency === 'High' ? 'risk' : a2.urgency === 'Medium' ? 'watch' : 'idle'}">${esc(a2.urgency)}</span>`,
+      `<span class="num ${a2.by && a2.by < today() && a2.status !== 'done' ? 'late' : ''}">${dLabel(a2.by)}</span>`,
+      `<span class="tag ${a2.status === 'done' ? 'done' : 'watch'}">${a2.status === 'done' ? 'Cleared' : 'With the CEO'}</span>`
+    ])));
+  else rs.appendChild(el('div', 'empty', 'You have not raised anything with the CEO.'));
+  const rb = el('button', 'btn pri', '+ Raise an item for the CEO');
+  rb.style.marginTop = '12px';
+  rb.onclick = () => editAsk(null);
+  rs.appendChild(rb);
+  v.appendChild(section('Raised with the CEO', 'Decisions, signatures or interventions you have asked for.', rs));
+
+  /* ---- the trackers, same as the main dashboard ---- */
+  v.appendChild(section('Today and overdue', 'Type in the bottom row to add a task of your own.',
     taskTable(bucket(mine, 'daily'), { defaultDue: today(), placeholder: 'Add a task for today', emptyText: 'Nothing overdue.' })));
   v.appendChild(section('This week', 'Falls due before ' + dLabel(addDays(today(), 7)) + '.',
     taskTable(bucket(mine, 'weekly'), { defaultDue: addDays(today(), 7), placeholder: 'Add a task for this week', emptyText: 'Nothing due this week.' })));
-  const later = bucket(mine, 'later');
-  if (later.length) v.appendChild(section('Later', 'Beyond this week.', taskTable(later, { add: false })));
-
-  v.appendChild(section('My projects', 'Only projects where you lead or own something.',
-    mps.length ? tableOf(['Project', 'Capacity', 'Progress', 'My open items', 'My past due', 'COD'],
-      mps.map(p => {
-        const myOpen = []; walkLeaves(p, n => { if (!n.closed && progOf(n) < 1) myOpen.push(n); });
-        return [{ link: [p.name, () => go('project', p.id)], html: `<div class="sub">${esc([p.site, p.state].filter(Boolean).join(', '))}</div>` },
-        `<span class="num">${((+p.solar || 0) + (+p.wind || 0))} MW</span>`,
-        `<div class="bar" style="min-width:100px"><i style="width:${Math.min(100, projProg(p) * 100)}%"></i></div><div class="num" style="font-size:11px">${pct(projProg(p))}</div>`,
-        `<span class="num">${myOpen.length}</span>`,
-        `<span class="num ${myOpen.filter(isLate).length ? 'late' : ''}">${myOpen.filter(isLate).length}</span>`,
-        `<span class="num">${p.cod ? mLabel(p.cod) : '—'}</span>`];
-      })) : el('div', 'empty', 'Nothing assigned to you yet. The CEO assigns owners on any activity.')));
-
-  const rs = el('div');
-  const rb = el('button', 'btn pri', '+ Raise an item for the CEO'); rb.onclick = () => editAsk(null);
-  if (raised.length) rs.appendChild(tableOf(['What I asked for', 'Project', 'Urgency', 'Needed by', 'Status'],
-    raised.map(a => [`<b>${esc(a.title)}</b>`, esc((proj(a.projectId) || {}).name || '—'),
-    `<span class="tag ${a.urgency === 'High' ? 'risk' : 'idle'}">${esc(a.urgency)}</span>`,
-    `<span class="num">${dLabel(a.by)}</span>`,
-    `<span class="tag ${a.status === 'done' ? 'done' : 'watch'}">${a.status === 'done' ? 'Cleared' : 'With the CEO'}</span>`])));
-  else rs.appendChild(el('div', 'empty', 'You have not raised anything with the CEO.'));
-  rs.appendChild(el('div', '', '')).appendChild(rb);
-  v.appendChild(section('With the CEO', 'Decisions, signatures or interventions you have asked for.', rs));
 }
 
 function section(title, sub, body) {
@@ -762,6 +859,7 @@ let PSORT = 'gap';
 function viewProjects() {
   $('#crumb').textContent = 'Deliver'; $('#title').textContent = 'Projects';
   const ta = $('#topActions'); ta.innerHTML = '';
+  ta.appendChild(undoBar());
   ta.appendChild(lens('projects'));
   if (isCEO()) {
     const w = el('button', 'btn', 'Choose status columns'); w.onclick = pickWatch; ta.appendChild(w);
@@ -989,11 +1087,39 @@ function addManyProjects() {
       renumberProject(p);
       S.projects.push(p);
     });
-    save(); closeDrawer(); render();
-    toast([fresh.length ? fresh.length + ' added' : '', fixed ? fixed + ' updated' : ''].filter(Boolean).join(', '));
+    save();
+    /* don't leave it to a toast — write it now and show what actually landed */
+    flush().then(reloadState).then(() => {
+      closeDrawer(); render();
+      bulkResult(fresh.map(r => r.name), fixed);
+    }).catch(e => {
+      render();
+      toast('Added here, but the save failed: ' + e.message);
+    });
   };
   row.append(fill, go);
   b.appendChild(row);
+}
+
+/* Shows what the server now holds, so there is no doubt whether it worked. */
+function bulkResult(added, fixed) {
+  const d = openDrawerEl(dHead('Projects', 'Saved') + '<div class="dbody" id="db"></div>');
+  wireClose(d);
+  const b = document.getElementById('db');
+  const solar = S.projects.reduce((a, p) => a + (+p.solar || 0), 0);
+  const wind = S.projects.reduce((a, p) => a + (+p.wind || 0), 0);
+  b.innerHTML = `<p class="sub" style="margin-top:0">Read back from the server after saving — this is what is stored, not just what is on screen.</p>
+    <div class="metrics" style="margin-bottom:18px">
+      <div class="metric"><div class="eyebrow">Projects now</div><div class="v">${S.projects.length}</div></div>
+      <div class="metric"><div class="eyebrow">Added</div><div class="v">${added.length}</div></div>
+      <div class="metric"><div class="eyebrow">Updated</div><div class="v">${fixed}</div></div>
+      <div class="metric"><div class="eyebrow">Capacity</div><div class="v">${fmt(solar + wind)}<small>MW</small></div>
+        <div class="l">${fmt(solar)} MWp solar · ${fmt(wind)} MW wind</div></div>
+    </div>
+    ${added.length ? '<div class="dsec"><h4>Added</h4><div class="sub">' + added.map(esc).join(' · ') + '</div></div>' : ''}`;
+  const ok = el('button', 'btn pri', 'Close');
+  ok.onclick = closeDrawer;
+  b.appendChild(ok);
 }
 
 /* "Pali – ISTS", "Pali" and "pali" are all the same project */
@@ -1041,6 +1167,7 @@ function parseProjectLines(text) {
   return out;
 }
 
+/* The capacity sheet, exactly as it stands. */
 const SUBSTATION_LIST = [
   'State\tSubstation\tSolar Capacity (MWp)\tWind Capacity (MW)\tConnectivity',
   'MP\tMorena\t465\t0\tISTS',
@@ -1149,6 +1276,7 @@ function viewProject() {
   const full = canSeeAll(p), sc = scopeOf(p);
   $('#crumb').textContent = 'Deliver / Projects'; $('#title').textContent = p.name;
   const ta = $('#topActions'); ta.innerHTML = '';
+  ta.appendChild(undoBar());
   const back = el('button', 'btn', '← All projects'); back.onclick = () => go('projects'); ta.appendChild(back);
   const chip = clipChip(); if (chip) ta.appendChild(chip);
   if (isCEO()) { const e = el('button', 'btn', 'Edit details'); e.onclick = () => editProject(p); ta.appendChild(e); }
@@ -1936,7 +2064,7 @@ function viewActivities() {
 const STAGES = { 'Utility': ['Identified', 'Bid filed', 'Bid won', 'PPA signed', 'Dropped'], 'C&I': ['Initial negotiation', 'MoU', 'Term sheet', 'PPA signed', 'Dropped'], 'Captive': ['Initial negotiation', 'MoU', 'Term sheet', 'PPA signed', 'Dropped'] };
 function viewOfftake() {
   $('#crumb').textContent = 'Secure'; $('#title').textContent = 'Offtake & PPA';
-  const ta = $('#topActions'); ta.innerHTML = '';
+  const ta = $('#topActions'); ta.innerHTML = ''; ta.appendChild(undoBar());
   const b = el('button', 'btn pri', '+ Add a deal'); b.onclick = () => editDeal(null); ta.appendChild(b);
   const v = $('#view'); v.innerHTML = '';
   const talks = S.deals.reduce((a, d) => a + (+d.capTalks || 0), 0);
@@ -2036,7 +2164,7 @@ function editDeal(d) {
 /* ===================== ENABLERS ===================== */
 function viewEnablers() {
   $('#crumb').textContent = 'Secure'; $('#title').textContent = 'Enablers';
-  const ta = $('#topActions'); ta.innerHTML = '';
+  const ta = $('#topActions'); ta.innerHTML = ''; ta.appendChild(undoBar());
   const b = el('button', 'btn pri', '+ Add an enabler'); b.onclick = () => editEnabler(null); ta.appendChild(b);
   const v = $('#view'); v.innerHTML = '';
   v.appendChild(el('p', 'sub', 'Things the CEO has to clear that sit above any single project — consultant appointments, approvals, and new opportunities. Each one has an end date and an owner.')).style.marginBottom = '18px';
@@ -2052,10 +2180,34 @@ function viewEnablers() {
           `<span class="sub">${esc(trim(e.purpose || '—', 64))}</span>`,
           esc(e.party || '—'), esc(pname(e.owner)),
           `<span class="num ${e.end && e.end < today() && e.status !== 'Done' ? 'late' : ''}">${dLabel(e.end)}</span>`,
-          `<span class="tag ${e.status === 'Done' ? 'done' : e.status === 'In progress' ? 'ok' : 'idle'}">${esc(e.status)}</span>`
+          { html: statusPicker(e), act: [
+            ['Edit', () => editEnabler(e)],
+            ['Delete', () => { if (confirm('Delete “' + e.title + '”?')) { S.enablers = S.enablers.filter(x => x.id !== e.id); save(); render(); toast('Deleted'); } }]
+          ] }
         ] })))));
   });
+  wireStatusPickers();
 }
+/* change an enabler's status straight from the list, with no panel */
+function statusPicker(e) {
+  return `<select class="inline enstat" data-en="${e.id}">` +
+    ['Not started', 'In progress', 'Done'].map(s => `<option ${e.status === s ? 'selected' : ''}>${s}</option>`).join('') +
+    '</select>';
+}
+function wireStatusPickers() {
+  document.querySelectorAll('select.enstat').forEach(sel => {
+    sel.onchange = () => {
+      const e = (S.enablers || []).find(x => x.id === sel.dataset.en);
+      if (!e) return;
+      const was = e.status;
+      e.status = sel.value;
+      if (e.status === 'Done' && was !== 'Done') e.doneOn = today();
+      if (e.status !== 'Done') e.doneOn = null;
+      save(); render();
+    };
+  });
+}
+
 function editEnabler(e) {
   const isNew = !e;
   e = e || { id: uid(), title: '', kind: 'Approval', forWhat: 'Shared functions', purpose: '', party: '', owner: '', end: '', status: 'Not started', note: '' };
@@ -2114,7 +2266,7 @@ function showLogin(msg, mode) {
       <label class="fld"><span>Password</span><input type="password" id="liPw" autocomplete="current-password" placeholder="Your password"></label>
       <button class="btn pri" id="liGo" style="width:100%">Sign in</button>
       <button class="btn ghost" id="liBack" style="width:100%;margin-top:8px">Use a different address</button>
-      <div class="loginhint">Forgotten it? Ask the CEO to issue a new invite code from the Organisation page — that resets your password.</div>`,
+      <div class="loginhint">Forgotten it? Ask the administrator to press <b>Send login</b> against your name — that sets a new one and sends it to you.</div>`,
     code: `
       <p class="sub">A six-digit code is on its way to <b>${esc(LOGIN.email)}</b>. It lasts ten minutes.</p>
       <label class="fld"><span>Code</span><input type="text" id="liCode" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code"></label>
@@ -2195,7 +2347,7 @@ function showLogin(msg, mode) {
 /* ===================== ORGANISATION ===================== */
 function viewOrg() {
   $('#crumb').textContent = 'Record'; $('#title').textContent = 'Organisation';
-  const ta = $('#topActions'); ta.innerHTML = '';
+  const ta = $('#topActions'); ta.innerHTML = ''; ta.appendChild(undoBar());
   const add = el('button', 'btn pri', '+ Add a person');
   add.onclick = () => editPerson(null);
   ta.appendChild(add);
@@ -2290,6 +2442,7 @@ function viewOrg() {
 function editPerson(o) {
   const isNew = !o;
   o = o || { id: uid(), empNo: '', name: '', designation: '', icom: '', mobile: '', email: '', dept: '', admin: false, signin: 'password' };
+  const prevEmail = o.email || '';
   const d = openDrawerEl(dHead('Organisation', isNew ? 'Add a person' : o.name || 'Person') + '<div class="dbody" id="db"></div>');
   wireClose(d);
   const b = document.getElementById('db');
@@ -2331,7 +2484,9 @@ function editPerson(o) {
     if (o.admin && !o.email) { o.admin = false; toast('Full rights need an email address — that is the login'); }
     if (isNew) S.org.push(o);
     save(); closeDrawer(); render();
-    toast(isNew ? 'Added' : 'Saved');
+    if (!isNew && prevEmail && prevEmail.toLowerCase() !== o.email.toLowerCase()) {
+      toast('Address changed — press Send login to give them a password for the new one');
+    } else toast(isNew ? 'Added' : 'Saved');
   };
   row.appendChild(ok);
   if (!isNew) {
@@ -2356,30 +2511,64 @@ function editPerson(o) {
 
 /* Sets a password and hands over the message — no invite step, nothing for
    them to choose before they can get in. */
+/* Setting somebody's password: you choose it or take the suggestion, and the
+   message to send them is built from whatever you actually used. */
 function sendLogin(o) {
-  api('POST', '/api/org/login-mail', { personId: o.id })
-    .then(r => {
-      const d = openDrawerEl(dHead('Organisation', 'Login for ' + esc(o.name)) + '<div class="dbody" id="db"></div>');
-      wireClose(d);
-      const b = document.getElementById('db');
-      b.innerHTML = `<p class="sub" style="margin-top:0">A password has been set. Send them this — it is everything they need.</p>
-        <div class="loginpair">
-          <div><span>Link</span><b>${esc(location.origin)}</b></div>
-          <div><span>Login</span><b>${esc(r.to)}</b></div>
-          <div><span>Password</span><b class="pw">${esc(r.password)}</b></div>
-        </div>
-        <div class="draftbox"><b>${esc(r.subject)}</b><pre>${esc(r.text)}</pre></div>`;
-      const row = el('div', 'row');
-      const mail = el('button', 'btn pri', 'Open a draft in my mail app');
-      mail.onclick = () => openDraft(r);
-      const copy = el('button', 'btn', 'Copy the message');
-      copy.onclick = () => navigator.clipboard.writeText(r.subject + '\n\n' + r.text)
-        .then(() => toast('Copied'), () => toast('Could not copy'));
-      row.append(mail, copy);
-      b.appendChild(row);
-      reloadState().catch(() => render());
-    })
-    .catch(e => toast(e.message));
+  const d = openDrawerEl(dHead('Organisation', 'Login for ' + esc(o.name)) + '<div class="dbody" id="db"></div>');
+  wireClose(d);
+  const b = document.getElementById('db');
+  const suggestion = suggestPassword();
+  b.innerHTML = `
+    <p class="sub" style="margin-top:0">Their login is <b>${esc(o.email)}</b>, in any mix of capitals — it makes no difference.</p>
+    <label class="pickrow"><input type="radio" name="pwmode" value="keep" checked style="width:auto">
+      <span><b>Keep their password as it is</b><div class="sub">Just re-send the link and their login. Use this if they already have one and have only mislaid the message.</div></span></label>
+    <label class="pickrow"><input type="radio" name="pwmode" value="set" style="width:auto">
+      <span><b>Set a new password</b><div class="sub">Replaces whatever they have now.</div></span></label>
+    <label class="fld" style="margin-top:14px"><span>New password</span><input type="text" id="pwSet" value="${esc(suggestion)}" disabled></label>
+    <div class="sub">Lower case letters and numbers only, at least 8 characters. No capitals, spaces or dashes.</div>`;
+  const modeIn = () => (b.querySelector('input[name=pwmode]:checked') || {}).value;
+  b.querySelectorAll('input[name=pwmode]').forEach(r2 => {
+    r2.onchange = () => { document.getElementById('pwSet').disabled = modeIn() !== 'set'; };
+  });
+  const row = el('div', 'row'); row.style.marginTop = '14px';
+  const go = el('button', 'btn pri', 'Show me the message');
+  go.onclick = () => {
+    const keep = modeIn() === 'keep';
+    const pw = document.getElementById('pwSet').value.trim().toLowerCase();
+    if (!keep && !/^[a-z0-9]{8,}$/.test(pw)) { toast('Lower case letters and numbers only, at least 8'); return; }
+    go.disabled = true; go.textContent = 'Working…';
+    api('POST', '/api/org/login-mail', { personId: o.id, keep, password: keep ? '' : pw })
+      .then(r => { showLoginMessage(o, r); reloadState().catch(() => render()); })
+      .catch(e => { go.disabled = false; go.textContent = 'Show me the message'; toast(e.message); });
+  };
+  const gen = el('button', 'btn', 'Suggest another');
+  gen.onclick = () => { document.getElementById('pwSet').value = suggestPassword(); };
+  row.append(go, gen);
+  b.appendChild(row);
+}
+function suggestPassword() {
+  const w = ['solar', 'turbine', 'grid', 'monsoon', 'substation', 'kilowatt', 'corridor', 'feeder', 'tariff', 'inverter'];
+  return w[Math.floor(Math.random() * w.length)] + Math.floor(1000 + Math.random() * 9000);
+}
+function showLoginMessage(o, r) {
+  const d = openDrawerEl(dHead('Organisation', 'Login for ' + esc(o.name)) + '<div class="dbody" id="db"></div>');
+  wireClose(d);
+  const b = document.getElementById('db');
+  b.innerHTML = `<p class="sub" style="margin-top:0">Done. Send them this — it is everything they need.</p>
+    <div class="loginpair">
+      <div><span>Link</span><b>${esc(location.origin)}</b></div>
+      <div><span>Login</span><b>${esc(r.to)}</b></div>
+      <div><span>Password</span><b class="pw">${r.password ? esc(r.password) : 'unchanged'}</b></div>
+    </div>
+    <div class="draftbox"><b>${esc(r.subject)}</b><pre>${esc(r.text)}</pre></div>`;
+  const row = el('div', 'row');
+  const mail = el('button', 'btn pri', 'Open a draft in my mail app');
+  mail.onclick = () => openDraft(r);
+  const copy = el('button', 'btn', 'Copy the message');
+  copy.onclick = () => navigator.clipboard.writeText(r.subject + '\n\n' + r.text)
+    .then(() => toast('Copied'), () => toast('Could not copy'));
+  row.append(mail, copy);
+  b.appendChild(row);
 }
 
 function countAssigned(id) {
@@ -2687,6 +2876,20 @@ function viewSettings() {
   ta.onchange = () => { S.statuses = ta.value.split('\n').map(s => s.trim()).filter(Boolean); save(); toast('Saved'); };
   st.appendChild(ta); v.appendChild(st);
 
+  const ver = el('section', 'sect');
+  ver.innerHTML = `<header><h2>Version</h2><div class="sub">If these two disagree, the browser is holding an old copy — reload with Ctrl+Shift+R.</div></header>
+    <div id="verLine" class="sub">Checking…</div>`;
+  v.appendChild(ver);
+  api('GET', '/api/health').then(h => {
+    const n = document.getElementById('verLine');
+    if (!n) return;
+    const same = h.build === BUILD;
+    n.innerHTML = 'Server <b>' + esc(h.build || 'unknown') + '</b> · this page <b>' + esc(BUILD) + '</b>' +
+      (same ? ' — matching.' : ' — <b class="late">they do not match.</b>') +
+      '<br>Storage: <b>' + esc(h.storage) + '</b> · projects stored: <b>' +
+      (Array.isArray(h.projects) ? h.projects.length : '?') + '</b>';
+  }).catch(() => { });
+
   const dt = el('section', 'sect');
   dt.innerHTML = `<header><h2>Data</h2><div class="sub">Everything lives in the server database. Take a backup before any large change.</div></header>`;
   const row = el('div', 'row');
@@ -2733,34 +2936,38 @@ function templatesSection() {
   const from = el('select'); from.style.maxWidth = '230px';
   from.innerHTML = '<option value="">Start blank</option><option value="__std">Copy the standard breakdown</option>' +
     S.projects.map(p => `<option value="${p.id}">Copy from ${esc(p.name)}</option>`).join('');
-  const make = el('button', 'btn pri', 'Create');
+  const make = el('button', 'btn pri', 'Create and open');
   make.onclick = () => {
     const n = name.value.trim();
-    if (!n) { name.focus(); return; }
+    if (!n) { name.focus(); toast('Give it a name first'); return; }
     let packages = [];
-    if (from.value === '__std') packages = clone(S.standardTemplate || []);
+    if (from.value === '__std') packages = JSON.parse(JSON.stringify(S.standardTemplate || []));
     else if (from.value) { const p = proj(from.value); if (p) packages = templateFromPackages(p.packages); }
     S.templates = S.templates || [];
-    S.templates.unshift({ id: uid(), name: n, note: from.value ? 'Copied on ' + dLabel(today()) : 'Built by hand', packages });
-    save(); render(); toast('Template created');
+    const t = { id: uid(), name: n, note: from.value ? 'Copied on ' + dLabel(today()) : 'Built by hand', packages };
+    S.templates.unshift(t);
+    tplRenumber(t);
+    save();
+    openTemplateEditor(t.id);
   };
   mk.append(name, from, make);
   s.appendChild(mk);
 
   const list = S.templates || [];
   if (!list.length) {
-    s.appendChild(el('div', 'empty', 'No templates yet. Build a project the way you want it, then copy it here — every later project can start from it.'));
+    s.appendChild(el('div', 'empty', 'No templates yet. Name one above and press Create and open — you can build the packages, tasks and subtasks there, or start from a copy of the standard breakdown.'));
     return s;
   }
-  s.appendChild(tableOf(['Template', 'Items', 'Where it came from', ''],
+  s.appendChild(tableOf(['Template', 'Packages', 'Lines', 'Where it came from', ''],
     list.map(t => [
-      { link: [t.name, () => renameTemplate(t)] },
+      { link: [t.name, () => openTemplateEditor(t.id)] },
+      `<span class="num">${(t.packages || []).length}</span>`,
       `<span class="num">${countIn(t.packages)}</span>`,
       `<span class="sub">${esc(t.note || '')}</span>`,
       {
         html: '', act: [
+          ['Open and edit', () => openTemplateEditor(t.id)],
           ['Apply to projects', () => applyTemplate(t)],
-          ['Duplicate', () => { S.templates.unshift({ id: uid(), name: t.name + ' (copy)', note: t.note, packages: clone(t.packages) }); save(); render(); }],
           ['Delete', () => { if (confirm('Delete the template “' + t.name + '”? Projects built from it are not affected.')) { S.templates = S.templates.filter(x => x.id !== t.id); save(); render(); } }]
         ]
       }
@@ -2818,11 +3025,202 @@ function applyTemplate(t) {
   b.appendChild(go);
 }
 
+/* ===================== TEMPLATE EDITOR ===================== */
+let TPLID = null;
+
+function openTemplateEditor(id) { TPLID = id; go('template'); }
+
+function viewTemplate() {
+  const t = (S.templates || []).find(x => x.id === TPLID);
+  if (!t) return go('settings');
+  $('#crumb').textContent = 'Record / Settings / Templates';
+  $('#title').textContent = t.name;
+  const ta = $('#topActions'); ta.innerHTML = '';
+  ta.appendChild(undoBar());
+  const back = el('button', 'btn', '← Settings'); back.onclick = () => go('settings'); ta.appendChild(back);
+  const use = el('button', 'btn pri', 'Apply to projects'); use.onclick = () => applyTemplate(t); ta.appendChild(use);
+
+  const v = $('#view'); v.innerHTML = '';
+  t.packages = t.packages || [];
+
+  /* header */
+  const head = el('div', 'metrics'); head.style.marginBottom = '22px';
+  const total = tplWeightTotal(t.packages);
+  head.innerHTML = `
+    <div class="metric"><div class="eyebrow">Template</div>
+      <div style="margin:6px 0"><input type="text" id="tplName" value="${esc(t.name)}" style="font-family:var(--serif);font-size:20px;padding:4px 8px"></div>
+      <div class="l">${esc(t.note || '')}</div></div>
+    <div class="metric"><div class="eyebrow">Packages</div><div class="v">${t.packages.length}</div><div class="l">Top level</div></div>
+    <div class="metric"><div class="eyebrow">Lines in total</div><div class="v">${countIn(t.packages)}</div><div class="l">Everything beneath</div></div>
+    <div class="metric"><div class="eyebrow">Weightage</div><div class="v" ${Math.abs(total - 100) > 0.5 ? 'style="color:var(--tangerine)"' : ''}>${total.toFixed(1)}%</div>
+      <div class="l">Packages should add to 100%</div></div>`;
+  v.appendChild(head);
+  $('#tplName', v).onchange = e => { t.name = e.target.value.trim() || t.name; save(); render(); };
+
+  /* toolbar */
+  const bar = el('div', 'toolbar');
+  const addPkg = el('button', 'btn sm pri', '+ Add a package');
+  addPkg.onclick = () => { t.packages.push(tplNode('New package', true)); tplRenumber(t); save(); render(); };
+  const expand = el('button', 'btn sm', 'Expand all');
+  expand.onclick = () => { tplWalk(t.packages, n => TPLOPEN[n.tid] = true); render(); };
+  const collapse = el('button', 'btn sm', 'Collapse all');
+  collapse.onclick = () => { tplWalk(t.packages, n => TPLOPEN[n.tid] = false); render(); };
+  const dup = el('button', 'btn sm', 'Duplicate template');
+  dup.onclick = () => {
+    S.templates.unshift({ id: uid(), name: t.name + ' (copy)', note: t.note, packages: JSON.parse(JSON.stringify(t.packages)) });
+    save(); toast('Duplicated'); go('settings');
+  };
+  const del = el('button', 'btn sm ghost', 'Delete template');
+  del.onclick = () => {
+    if (!confirm('Delete the template “' + t.name + '”? Projects built from it are not affected.')) return;
+    S.templates = S.templates.filter(x => x.id !== t.id); save(); go('settings');
+  };
+  bar.append(addPkg, expand, collapse, dup, del);
+  v.appendChild(bar);
+
+  /* the tree */
+  const host = el('div', 'wb editing');
+  const hd = el('div', 'thead');
+  hd.innerHTML = '<div>Line</div><div class="r">Weight %</div><div>Quantity</div><div>Unit</div><div class="r">Edit</div>';
+  hd.style.gridTemplateColumns = 'minmax(280px,1fr) 90px 110px 110px 232px';
+  host.appendChild(hd);
+  if (!t.packages.length) {
+    host.appendChild(el('div', 'empty', 'Empty. Add a package, then add tasks under it — the same shape as the Morena breakdown.'));
+  }
+  tplRows(t, t.packages, host, 0);
+  v.appendChild(host);
+  v.appendChild(el('p', 'sub', 'Weightage on a package is its share of the whole project. On a line beneath, it is its share within its package. Parent lines take the sum of what is under them.'));
+}
+
+const TPLOPEN = {};
+function tplNode(name, isPkg) {
+  const n = { tid: uid(), code: '', name: name, w: isPkg ? 0 : 1, children: [] };
+  if (isPkg) n.pw = 0;
+  return n;
+}
+function tplWalk(list, fn, parent) { (list || []).forEach(n => { fn(n, parent); tplWalk(n.children, fn, n); }); }
+function tplWeightTotal(list) { return (list || []).reduce((a, n) => a + (+n.pw || 0) * 100, 0); }
+function tplRenumber(t) {
+  (t.packages || []).forEach((pk, i) => {
+    if (!pk.tid) pk.tid = uid();
+    pk.code = letterCodeC(i);
+    (function rec(l, prefix) {
+      (l || []).forEach((n, j) => {
+        if (!n.tid) n.tid = uid();
+        n.code = prefix ? prefix + '.' + (j + 1) : String(j + 1);
+        rec(n.children, n.code);
+      });
+    })(pk.children, '');
+  });
+}
+function letterCodeC(i) {
+  let s = ''; i = i + 1;
+  while (i > 0) { const r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); }
+  return s;
+}
+function tplParentOf(t, node) {
+  let found = null;
+  tplWalk(t.packages, (n, parent) => { if (n === node) found = parent || null; });
+  return found;
+}
+function tplListOf(t, node) { const p = tplParentOf(t, node); return p ? (p.children = p.children || []) : t.packages; }
+
+function tplRows(t, list, host, depth) {
+  (list || []).forEach(n => {
+    if (!n.tid) n.tid = uid();
+    const kids = n.children && n.children.length;
+    const open = TPLOPEN[n.tid] !== false;
+    const r = el('div', 'trow lvl' + Math.min(depth, 3));
+    r.style.gridTemplateColumns = 'minmax(280px,1fr) 90px 110px 110px 232px';
+
+    const nm = el('div', 'tname'); nm.style.paddingLeft = (depth * 15) + 'px';
+    if (kids) {
+      const tg = el('button', 'tw', open ? '▾' : '▸');
+      tg.onclick = () => { TPLOPEN[n.tid] = !open; render(); };
+      nm.appendChild(tg);
+    } else nm.appendChild(el('span', 'tw'));
+    nm.appendChild(el('span', 'tcode', esc(n.code || '')));
+    const ti = el('input'); ti.type = 'text'; ti.className = 'inline title'; ti.value = n.name;
+    ti.onchange = () => { n.name = ti.value.trim() || n.name; save(); };
+    nm.appendChild(ti);
+    r.appendChild(nm);
+
+    const wc = el('div', 'num r');
+    /* A package always shows its own share of the project, even when it has
+       children — that is the number that has to add to 100%. A line beneath
+       with children shows the sum of what is under it. */
+    if (depth === 0 || !kids) {
+      const wi = el('input'); wi.type = 'number'; wi.step = '0.5'; wi.min = '0'; wi.className = 'inline'; wi.style.width = '70px';
+      wi.value = ((depth === 0 ? (+n.pw || 0) : (+n.w || 0)) * 100).toFixed(1);
+      wi.title = depth === 0 ? 'Share of the whole project' : 'Share within its package';
+      wi.onchange = () => { const val = (+wi.value || 0) / 100; if (depth === 0) n.pw = val; else n.w = val; save(); render(); };
+      wc.appendChild(wi);
+    } else wc.textContent = (tplRolled(n) * 100).toFixed(1) + '%';
+    r.appendChild(wc);
+
+    const qi = el('input'); qi.type = 'text'; qi.className = 'inline'; qi.value = n.qty != null ? n.qty : '';
+    qi.placeholder = '—';
+    qi.onchange = () => { const val = qi.value.trim(); if (val) n.qty = val; else delete n.qty; save(); };
+    r.appendChild(el('div')).appendChild(qi);
+
+    const ui = el('input'); ui.type = 'text'; ui.className = 'inline'; ui.value = n.unit || '';
+    ui.placeholder = 'acres, nos';
+    ui.onchange = () => { n.unit = ui.value.trim(); save(); };
+    r.appendChild(el('div')).appendChild(ui);
+
+    const act = el('div', 'r acts');
+    const mk = (label, title, fn) => { const bt = el('button', 'ib', label); bt.title = title; bt.onclick = fn; return bt; };
+    act.append(
+      mk('+', 'Add a line underneath', () => {
+        n.children = n.children || [];
+        n.children.push(tplNode('New line', false));
+        TPLOPEN[n.tid] = true; tplRenumber(t); save(); render();
+      }),
+      mk('=', 'Add a line alongside', () => {
+        const l = tplListOf(t, n); l.splice(l.indexOf(n) + 1, 0, tplNode('New line', depth === 0));
+        tplRenumber(t); save(); render();
+      }),
+      mk('↑', 'Move up', () => { const l = tplListOf(t, n); const i = l.indexOf(n); if (i > 0) { l.splice(i, 1); l.splice(i - 1, 0, n); tplRenumber(t); save(); render(); } }),
+      mk('↓', 'Move down', () => { const l = tplListOf(t, n); const i = l.indexOf(n); if (i < l.length - 1) { l.splice(i, 1); l.splice(i + 1, 0, n); tplRenumber(t); save(); render(); } }),
+      mk('→', 'Make it a subtask of the line above', () => {
+        const l = tplListOf(t, n); const i = l.indexOf(n);
+        if (i <= 0) { toast('Nothing above it to sit under'); return; }
+        const prev = l[i - 1]; l.splice(i, 1);
+        prev.children = prev.children || []; prev.children.push(n);
+        delete n.pw; if (!n.w) n.w = 1;
+        TPLOPEN[prev.tid] = true; tplRenumber(t); save(); render();
+      }),
+      mk('←', 'Move it up a level', () => {
+        const parent = tplParentOf(t, n);
+        if (!parent) { toast('Already a package'); return; }
+        parent.children = parent.children.filter(c => c !== n);
+        const gl = tplListOf(t, parent); gl.splice(gl.indexOf(parent) + 1, 0, n);
+        if (gl === t.packages) n.pw = n.pw || 0;
+        tplRenumber(t); save(); render();
+      }),
+      mk('×', 'Delete this line and everything under it', () => {
+        const count = countIn([n]);
+        if (!confirm('Delete “' + n.name + '”' + (count > 1 ? ' and the ' + (count - 1) + ' lines under it' : '') + '?')) return;
+        const l = tplListOf(t, n); l.splice(l.indexOf(n), 1);
+        tplRenumber(t); save(); render();
+      })
+    );
+    r.appendChild(act);
+    host.appendChild(r);
+    if (open) tplRows(t, n.children, host, depth + 1);
+  });
+}
+function tplRolled(n) {
+  if (!n.children || !n.children.length) return +n.w || 0;
+  return n.children.reduce((a, c) => a + tplRolled(c), 0);
+}
+
 /* ===================== boot ===================== */
 function render() {
   renderRail();
-  if (!isCEO() && ADMIN_ONLY.indexOf(VIEW) >= 0) VIEW = 'dashboard';
+  if (!isCEO() && (ADMIN_ONLY.indexOf(VIEW) >= 0 || VIEW === 'template')) VIEW = 'dashboard';
   ({
+    template: viewTemplate,
     project: viewProject, projects: viewProjects, activities: viewActivities,
     offtake: viewOfftake, enablers: viewEnablers, people: viewPeople,
     org: viewOrg, settings: viewSettings
@@ -2837,6 +3235,7 @@ async function boot() {
   }
   const out = await api('GET', '/api/state');
   REV = out.rev; adoptState(out.state);
+  HIST.past.length = 0; HIST.future.length = 0; HIST.last = JSON.stringify(S);
   const host = document.getElementById('login');
   if (host) host.style.display = 'none';
   document.body.classList.remove('locked');

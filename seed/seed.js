@@ -29,7 +29,7 @@ function templateFrom(list) {
 function newProject(o) {
   return Object.assign({
     id: uid(), name: 'Untitled project', site: '', state: '', solar: 0, wind: 0, bess: 0,
-    cod: '', head: '', setup: true, snaps: [], chg: [], packages: clonePackages(WBS.packages, false)
+    cod: '', head: '', conn: '', setup: true, snaps: [], chg: [], packages: clonePackages(WBS.packages, false)
   }, o);
 }
 
@@ -61,22 +61,22 @@ module.exports = function seed() {
   /* The portfolio exactly as it stands in the capacity sheet: state code,
      substation, solar MWp, wind MW, and how it connects. */
   const PORTFOLIO = [
-    { state: 'MP',  name: 'Morena',                        solar: 465,   wind: 0,     conn: 'ISTS' },
-    { state: 'GJ',  name: 'Sisrana',                       solar: 155,   wind: 0,     conn: 'InSTS' },
-    { state: 'KA',  name: 'Davanagere',                    solar: 0,     wind: 300,   conn: 'ISTS' },
-    { state: 'GJ',  name: 'Saurashtra',                    solar: 0,     wind: 100,   conn: 'InSTS' },
-    { state: 'AP',  name: 'Ananthapuram III',              solar: 465,   wind: 0,     conn: 'ISTS' },
-    { state: 'AP',  name: 'Krishnagiri PS (Kurnool V)',    solar: 542.5, wind: 0,     conn: 'ISTS' },
-    { state: 'GJ',  name: 'Bhachau / Lakhadia II',         solar: 0,     wind: 249.1, conn: 'ISTS' },
-    { state: 'RJ',  name: 'Pali',                          solar: 240.3, wind: 0,     conn: 'ISTS' },
-    { state: 'GJ',  name: 'Khavda VII',                    solar: 387.5, wind: 100,   conn: 'ISTS' },
-    { state: 'MH',  name: 'Solapur',                       solar: 465,   wind: 0,     conn: 'ISTS' },
-    { state: 'AP',  name: 'Ananthapuram III (Ph-2)',       solar: 930,   wind: 0,     conn: 'ISTS' },
-    { state: 'GJ',  name: 'Bhalgamda, Morbi',              solar: 465,   wind: 0,     conn: 'InSTS' },
-    { state: 'UP',  name: 'Sahjahanpur, Jalaun',           solar: 125.6, wind: 0,     conn: 'InSTS' },
-    { state: 'UP',  name: 'Purakalan, Lalitpur',           solar: 37.2,  wind: 0,     conn: 'InSTS' },
-    { state: 'MH',  name: 'Jamgaon',                       solar: 77.5,  wind: 50,    conn: 'InSTS' },
-    { state: 'TN',  name: 'Karur',                         solar: 77.5,  wind: 50,    conn: 'InSTS' }
+    { state: 'MP', name: 'Morena', solar: 465, wind: 0, conn: 'ISTS' },
+    { state: 'GJ', name: 'Sisrana', solar: 155, wind: 0, conn: 'InSTS' },
+    { state: 'KA', name: 'Davanagere', solar: 0, wind: 300, conn: 'ISTS' },
+    { state: 'GJ', name: 'Saurashtra', solar: 0, wind: 100, conn: 'InSTS' },
+    { state: 'AP', name: 'Ananthapuram III', solar: 465, wind: 0, conn: 'ISTS' },
+    { state: 'AP', name: 'Krishnagiri PS (Kurnool V)', solar: 542.5, wind: 0, conn: 'ISTS' },
+    { state: 'GJ', name: 'Bhachau / Lakhadia II', solar: 0, wind: 249.1, conn: 'ISTS' },
+    { state: 'RJ', name: 'Pali', solar: 240.3, wind: 0, conn: 'ISTS' },
+    { state: 'GJ', name: 'Khavda VII', solar: 387.5, wind: 100, conn: 'ISTS' },
+    { state: 'MH', name: 'Solapur', solar: 465, wind: 0, conn: 'ISTS' },
+    { state: 'AP', name: 'Ananthapuram III (Ph-2)', solar: 930, wind: 0, conn: 'ISTS' },
+    { state: 'GJ', name: 'Bhalgamda, Morbi', solar: 465, wind: 0, conn: 'InSTS' },
+    { state: 'UP', name: 'Sahjahanpur, Jalaun', solar: 125.6, wind: 0, conn: 'InSTS' },
+    { state: 'UP', name: 'Purakalan, Lalitpur', solar: 37.2, wind: 0, conn: 'InSTS' },
+    { state: 'MH', name: 'Jamgaon', solar: 77.5, wind: 50, conn: 'InSTS' },
+    { state: 'TN', name: 'Karur', solar: 77.5, wind: 50, conn: 'InSTS' }
   ];
 
   const projects = PORTFOLIO.map(row => newProject({
